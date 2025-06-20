@@ -1,0 +1,28 @@
+entrypoint = "index.ts"
+
+hidden = [".config", "bun.lockb"]
+modules = ["bun-1.1", "nodejs-20"]
+
+[nix]
+channel = "stable-24_05"
+
+[deployment]
+build = ["sh", "-c", "mkdir .build && bun build index.ts > .build/index.js"]
+run = ["bun", ".build/index.js"]
+deploymentTarget = "cloudrun"
+
+[[ports]]
+localPort = 3000
+externalPort = 3000
+
+[[ports]]
+localPort = 3001
+externalPort = 80
+
+[[ports]]
+localPort = 3002
+externalPort = 3002
+
+[[ports]]
+localPort = 4000
+externalPort = 4200

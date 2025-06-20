@@ -1,0 +1,17 @@
+{
+  "name": "app",
+  "version": "1.0.50",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "bun run --watch app/src/index.ts"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "elysia": "latest",
+    "sqlite3": "^5.1.7"
+  },
+  "devDependencies": {
+    "bun-types": "latest"
+  },
+  "module": "app/src/index.js"
+}
