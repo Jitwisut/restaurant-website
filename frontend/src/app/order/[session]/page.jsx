@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import axios from "axios";
 import { useParams, useRouter } from "next/navigation";
-import { useWS } from "@/app/components/UserProvider";
 import {
   ShoppingCart,
   Plus,
@@ -25,31 +24,30 @@ import {
 
 /* ------------ ตั้งค่าฐาน URL ของ API (จาก .env หรือ fallback) ------------ */
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+const WS_BASE = process.env.NEXT_PUBLIC_API_WS || "ws://localhost:4000";
 
-/* ======================================================================= */
 export default function OrderPage() {
-  const { sendJSON } = useWS();
-  /* ---------- ดึงค่าพารามิเตอร์จาก URL ---------- */
+  const wsRef = useRef(null);
+  const [wsStatus, setWsStatus] = useState("กำลังเชื่อมต่อ...");
+  const [wsError, setWsError] = useState(null);
+  const [wsMessages, setWsMessages] = useState([]);
+
   const { session: sessionHash } = useParams(); // /order/[session]
   const router = useRouter();
-  /* ---------- state หลัก ---------- */
-  const [loading, setLoading] = useState(true); // หน้าโหลดโต๊ะ
-  const [table, setTable] = useState(null); // ข้อมูลโต๊ะ
-  const [menu, setMenu] = useState([]); // รายการเมนู
-  const [cart, setCart] = useState([]); // ตะกร้า
+
+  const [loading, setLoading] = useState(true);
+  const [table, setTable] = useState(null);
+  const [menu, setMenu] = useState([]);
+  const [cart, setCart] = useState([]);
   const [sending, setSending] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState("ทั้งหมด");
-
-  /* ---------- state ใหม่สำหรับฟีเจอร์เพิ่มเติม ---------- */
   const [searchTerm, setSearchTerm] = useState("");
   const [favorites, setFavorites] = useState(new Set());
   const [sortBy, setSortBy] = useState("default");
   const [showFilters, setShowFilters] = useState(false);
-  const [viewMode, setViewMode] = useState("grid");
 
-  /* ---------- โหลดข้อมูลโต๊ะ + เมนู ครั้งแรก ---------- */
+  // โหลดข้อมูลโต๊ะ+เมนู
   useEffect(() => {
-    // ตรวจ hash ว่ามีโต๊ะจริงไหม
     const loadTable = async () => {
       try {
         const res = await axios.get(`${API}/tables/checktable/${sessionHash}`, {
@@ -63,32 +61,58 @@ export default function OrderPage() {
         setLoading(false);
       }
     };
-
-    // โหลดเมนู
     const loadMenu = async () => {
       try {
         const { data } = await axios.get(`${API}/menu/get`, {
           withCredentials: true,
         });
-
-        /* --- ดักทุกกรณีให้ menu กลายเป็น Array --- */
         const list = Array.isArray(data)
-          ? data // server ส่งอาร์เรย์ตรง ๆ
+          ? data
           : Array.isArray(data.menu)
-          ? data.menu // server ส่ง { menu: [...] }
-          : []; // กรณีอื่น → อาร์เรย์ว่าง
+          ? data.menu
+          : [];
         setMenu(list);
       } catch (err) {
-        console.error("โหลดเมนูไม่สำเร็จ:", err);
-        setMenu([]); // กัน map() ล้ม
+        setMenu([]);
       }
     };
-
     loadTable();
     loadMenu();
   }, [sessionHash, router]);
 
-  /* ---------- หมวดหมู่ & ตัวกรอง ---------- */
+  // ---------- WebSocket ----------
+  useEffect(() => {
+    const username = sessionHash || "user";
+    const role = "user";
+    const wsURL = `${WS_BASE}/ws/${username}?role=${role}`;
+    const ws = new WebSocket(wsURL);
+    wsRef.current = ws;
+    ws.onopen = () => {
+      setWsStatus("เชื่อมต่อสำเร็จ");
+      setWsError(null);
+    };
+    ws.onclose = () => {
+      setWsStatus("ตัดการเชื่อมต่อ");
+    };
+    ws.onerror = () => {
+      setWsStatus("เกิดข้อผิดพลาด");
+      setWsError("เกิดข้อผิดพลาดในการเชื่อมต่อ WebSocket");
+    };
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === "system" || msg.type === "error") {
+          setWsMessages((prev) => [...prev, msg.message]);
+        }
+      } catch {
+        setWsMessages((prev) => [...prev, "รับข้อมูลผิดพลาด"]);
+      }
+    };
+    return () => {
+      ws.close();
+    };
+  }, [sessionHash]);
+
   const categories = [
     "ทั้งหมด",
     ...new Set(
@@ -96,16 +120,11 @@ export default function OrderPage() {
     ),
   ];
 
-  // ฟังก์ชันกรองและเรียงลำดับเมนู
   const getFilteredAndSortedMenu = () => {
     let filtered = menu;
-
-    // กรองตามหมวดหมู่
     if (selectedCategory !== "ทั้งหมด") {
       filtered = filtered.filter((item) => item.category === selectedCategory);
     }
-
-    // กรองตามคำค้นหา
     if (searchTerm) {
       filtered = filtered.filter(
         (item) =>
@@ -114,8 +133,6 @@ export default function OrderPage() {
             item.description.toLowerCase().includes(searchTerm.toLowerCase()))
       );
     }
-
-    // เรียงลำดับ
     switch (sortBy) {
       case "price-low":
         filtered.sort((a, b) => a.price - b.price);
@@ -126,21 +143,13 @@ export default function OrderPage() {
       case "rating":
         filtered.sort((a, b) => (b.rating || 0) - (a.rating || 0));
         break;
-      case "popular":
-        // สามารถเพิ่มการเรียงตาม popularity ได้
-        break;
-      default:
-        // ไม่เรียง
-        break;
     }
-
     return filtered;
   };
 
   const filteredMenu = getFilteredAndSortedMenu();
 
-  /* ---------- ฟังก์ชันจัดการตะกร้า ---------- */
-  const addToCart = (item) =>
+ /* const addToCart = (item) =>
     setCart((prev) => {
       const found = prev.find((i) => i.item.id === item.id);
       return found
@@ -148,7 +157,28 @@ export default function OrderPage() {
             i.item.id === item.id ? { ...i, qty: i.qty + 1 } : i
           )
         : [...prev, { item, qty: 1 }];
-    });
+    });*/
+
+    const addToCart = (item) => {
+  setCart((prevCart) => {
+    // หา index ของ item ใน cart
+    const index = prevCart.findIndex((i) => i.item.id === item.id);
+
+    // ถ้ามีอยู่ใน cart แล้ว เพิ่ม qty
+    if (index !== -1) {
+      return prevCart.map((cartItem, idx) =>
+        idx === index
+          ? { ...cartItem, qty: cartItem.qty + 1 }
+          : cartItem
+      );
+    }
+
+    // ถ้ายังไม่มีใน cart เพิ่มใหม่
+    return [...prevCart, {table_number:table?.table_number, name:item.name,item, qty: 1,image:item.image}];
+  });
+};
+
+
 
   const changeQty = (id, delta) =>
     setCart((prev) =>
@@ -166,7 +196,6 @@ export default function OrderPage() {
 
   const getTotalItems = () => cart.reduce((sum, i) => sum + i.qty, 0);
 
-  /* ---------- ฟังก์ชันใหม่ ---------- */
   const toggleFavorite = (itemId) => {
     setFavorites((prev) => {
       const newFavorites = new Set(prev);
@@ -187,28 +216,30 @@ export default function OrderPage() {
           text: `ลองเมนู ${item.name} ที่ราคา ฿${item.price}`,
           url: window.location.href,
         });
-      } catch (err) {
-        console.log("Error sharing:", err);
-      }
+      } catch {}
     }
   };
-  /* ---------- ส่งออร์เดอร์ผ่าน WebSocket ---------- */
+
   const submitOrder = () => {
     if (cart.length === 0) return alert("ยังไม่ได้เลือกเมนู");
-
-    /** payload ตรงกับโค้ดเซิร์ฟเวอร์ */
-    sendJSON({
-      type: "order",
-      menu: {
-        items: cart.map((c) => ({ id: c.item.id, qty: c.qty })),
-      },
-    });
-
-    setCart([]); // เคลียร์ตะกร้าหลังส่ง
-    alert("ส่งคำสั่งไปครัวแล้ว!");
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: "order",
+          menu: {
+            items: cart.map((c) => ({ id: c.item.id, qty: c.qty ,name:c.item.name,table_number:c.table_number})),
+          },
+        })
+      );
+      setCart([]);
+      alert("ส่งคำสั่งไปครัวแล้ว!");
+    } else {
+      alert(
+        "ยังไม่ได้เชื่อมต่อกับระบบครัว หรือเชื่อมต่อขัดข้อง กรุณาลองใหม่อีกครั้ง"
+      );
+    }
   };
 
-  /* ---------- หน้า Loading ---------- */
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50">
@@ -234,9 +265,20 @@ export default function OrderPage() {
     );
   }
 
-  /* =========================== JSX หลัก =========================== */
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50">
+      {/* สถานะ websocket */}
+      <div className="fixed bottom-4 left-4 z-50 bg-white/90 px-4 py-2 rounded-xl shadow border">
+        <span className="font-medium text-purple-700">{wsStatus}</span>
+        {wsError && <div className="text-red-500">{wsError}</div>}
+        {wsMessages.length > 0 && (
+          <ul className="text-xs text-gray-500 mt-1">
+            {wsMessages.map((msg, idx) => (
+              <li key={idx}>{msg}</li>
+            ))}
+          </ul>
+        )}
+      </div>
       {/* ------------------ Header ------------------ */}
       <header className="bg-white/80 backdrop-blur-xl shadow-xl sticky top-0 z-50 border-b border-purple-100">
         <div className="max-w-7xl mx-auto px-4 py-6">
@@ -266,8 +308,6 @@ export default function OrderPage() {
                 </div>
               </div>
             </div>
-
-            {/* Cart Icon */}
             <div className="relative">
               <div className="bg-gradient-to-r from-purple-500 to-pink-500 p-4 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105 cursor-pointer group">
                 <ShoppingCart className="h-7 w-7 text-white group-hover:animate-bounce" />
@@ -286,8 +326,6 @@ export default function OrderPage() {
               )}
             </div>
           </div>
-
-          {/* Search and Filters */}
           <div className="flex flex-col lg:flex-row gap-4">
             <div className="relative flex-1">
               <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
@@ -299,7 +337,6 @@ export default function OrderPage() {
                 className="w-full pl-12 pr-4 py-3 rounded-2xl border border-gray-200 focus:border-purple-400 focus:ring-4 focus:ring-purple-100 outline-none transition-all bg-white/70 backdrop-blur-sm"
               />
             </div>
-
             <div className="flex items-center space-x-3">
               <select
                 value={sortBy}
@@ -312,7 +349,6 @@ export default function OrderPage() {
                 <option value="rating">คะแนนสูงสุด</option>
                 <option value="popular">ยอดนิยม</option>
               </select>
-
               <button
                 onClick={() => setShowFilters(!showFilters)}
                 className={`p-3 rounded-2xl border transition-all ${
@@ -327,11 +363,9 @@ export default function OrderPage() {
           </div>
         </div>
       </header>
-
       <div className="max-w-7xl mx-auto px-4 py-8 grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* ------------------ Menu Section ------------------ */}
         <section className="lg:col-span-2">
-          {/* Category Filter */}
           {categories.length > 1 && (
             <div className="mb-8">
               <div className="flex items-center justify-between mb-6">
@@ -343,7 +377,6 @@ export default function OrderPage() {
                   {filteredMenu.length} รายการ
                 </div>
               </div>
-
               <div className="flex flex-wrap gap-3">
                 {categories.map((cat) => (
                   <button
@@ -361,13 +394,10 @@ export default function OrderPage() {
               </div>
             </div>
           )}
-
-          {/* Menu Cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
             {filteredMenu.map((item) => {
               const cartItem = cart.find((c) => c.item.id === item.id);
               const isFavorite = favorites.has(item.id);
-
               return (
                 <div
                   key={item.id}
@@ -381,8 +411,6 @@ export default function OrderPage() {
                         className="w-full h-56 object-cover group-hover:scale-110 transition-transform duration-700"
                       />
                       <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent" />
-
-                      {/* Badges */}
                       <div className="absolute top-4 left-4 flex flex-col space-y-2">
                         {item.category && (
                           <span className="bg-white/90 backdrop-blur-sm px-3 py-1 rounded-full text-xs font-bold text-gray-800 border border-white/50">
@@ -396,7 +424,6 @@ export default function OrderPage() {
                           </span>
                         )}
                       </div>
-
                       <div className="absolute top-4 right-4 flex flex-col space-y-2">
                         {item.rating && (
                           <div className="bg-white/95 backdrop-blur-sm px-3 py-2 rounded-full shadow-lg flex items-center space-x-1">
@@ -406,7 +433,6 @@ export default function OrderPage() {
                             </span>
                           </div>
                         )}
-
                         <div className="flex space-x-2">
                           <button
                             onClick={() => toggleFavorite(item.id)}
@@ -422,7 +448,6 @@ export default function OrderPage() {
                               }`}
                             />
                           </button>
-
                           <button
                             onClick={() => shareMenu(item)}
                             className="p-2 rounded-full bg-white/80 text-gray-600 hover:bg-blue-50 backdrop-blur-sm transition-all duration-300"
@@ -433,7 +458,6 @@ export default function OrderPage() {
                       </div>
                     </div>
                   )}
-
                   <div className="p-6">
                     <div className="flex justify-between items-start mb-4">
                       <h3 className="font-bold text-xl text-gray-800 group-hover:text-purple-600 transition-colors">
@@ -451,21 +475,17 @@ export default function OrderPage() {
                           )}
                       </div>
                     </div>
-
                     {item.time && (
                       <div className="flex items-center space-x-2 text-sm text-gray-500 mb-3">
                         <Clock className="h-4 w-4" />
                         <span>{item.time}</span>
                       </div>
                     )}
-
                     {item.description && (
                       <p className="text-gray-600 text-sm mb-4 line-clamp-2 leading-relaxed">
                         {item.description}
                       </p>
                     )}
-
-                    {/* Add / Qty Buttons */}
                     {cartItem ? (
                       <div className="flex items-center justify-between bg-gradient-to-r from-purple-50 to-pink-50 p-4 rounded-2xl border border-purple-100">
                         <div className="flex items-center space-x-4">
@@ -503,7 +523,6 @@ export default function OrderPage() {
               );
             })}
           </div>
-
           {filteredMenu.length === 0 && (
             <div className="text-center py-16">
               <div className="bg-white/80 backdrop-blur-sm rounded-3xl p-12 shadow-xl border border-white/50">
@@ -519,7 +538,6 @@ export default function OrderPage() {
             </div>
           )}
         </section>
-
         {/* ------------------ Cart Section ------------------ */}
         <aside className="lg:col-span-1">
           <div className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-2xl p-6 sticky top-32 border border-white/50">
@@ -534,7 +552,6 @@ export default function OrderPage() {
                 </span>
               )}
             </h2>
-
             {cart.length === 0 ? (
               <div className="text-center py-12">
                 <div className="bg-gradient-to-br from-purple-50 to-pink-50 rounded-2xl p-8 border border-purple-100">
@@ -564,7 +581,6 @@ export default function OrderPage() {
                           ฿{c.item.price * c.qty}
                         </span>
                       </div>
-
                       <div className="flex justify-between items-center">
                         <span className="text-sm text-gray-600">
                           ฿{c.item.price} × {c.qty}
@@ -590,7 +606,6 @@ export default function OrderPage() {
                     </div>
                   ))}
                 </div>
-
                 <div className="border-t border-gray-200 pt-6 mb-6">
                   <div className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-2xl p-4 border border-purple-100">
                     <div className="flex justify-between items-center">
@@ -606,7 +621,6 @@ export default function OrderPage() {
                     </div>
                   </div>
                 </div>
-
                 <button
                   onClick={submitOrder}
                   disabled={sending}
@@ -629,8 +643,6 @@ export default function OrderPage() {
                     </span>
                   )}
                 </button>
-
-                {/* Order Summary */}
                 <div className="mt-4 text-center">
                   <p className="text-xs text-gray-500">
                     คำสั่งซื้อจะถูกส่งไปยังครัวทันที
@@ -639,8 +651,6 @@ export default function OrderPage() {
               </>
             )}
           </div>
-
-          {/* Quick Actions */}
           {cart.length > 0 && (
             <div className="mt-6 bg-white/80 backdrop-blur-sm rounded-3xl shadow-xl p-4 border border-white/50">
               <h3 className="font-bold text-gray-800 mb-3 flex items-center space-x-2">
@@ -662,8 +672,6 @@ export default function OrderPage() {
           )}
         </aside>
       </div>
-
-      {/* Floating Action Buttons */}
       <div className="fixed bottom-6 right-6 flex flex-col space-y-3 z-40">
         {favorites.size > 0 && (
           <button className="bg-gradient-to-r from-red-500 to-pink-500 text-white p-4 rounded-full shadow-xl hover:shadow-2xl transition-all duration-300 hover:scale-110 group">
@@ -673,13 +681,10 @@ export default function OrderPage() {
             </span>
           </button>
         )}
-
         <button className="bg-gradient-to-r from-blue-500 to-indigo-500 text-white p-4 rounded-full shadow-xl hover:shadow-2xl transition-all duration-300 hover:scale-110">
           <Share2 className="h-6 w-6" />
         </button>
       </div>
-
-      {/* Custom Styles */}
       <style jsx>{`
         .custom-scrollbar::-webkit-scrollbar {
           width: 6px;
