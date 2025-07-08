@@ -18,16 +18,11 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="th">
-      <body className="flex h-screen overflow-hidden antialiased">
-        {/* Sidebar */}
-        <SidebarCard />
-
+      <body
+        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+      >
         {/* ⭐️ โค้ดทุกหน้า (รวม OrderPage, Kitchen ฯลฯ) จะถูกห่อด้วย Provider ที่นี่ */}
-
-        {/* พื้นที่หลัก */}
-        <main className="flex flex-1 items-center justify-center p-6">
-          {children} {/* หน้าต่างๆ จะมาอยู่ตรงกลางจริง ๆ */}
-        </main>
+        {children}
       </body>
     </html>
   );
