@@ -12,12 +12,19 @@ import {
   ChefHat,
   Eye,
   EyeOff,
+  Upload,
+  X,
+  Plus,
+  Image,
+  DollarSign,
+  FileText,
+  Tag,
 } from "lucide-react";
 import axios from "axios";
 
 const AdminUserManagement = () => {
   const router = useRouter();
-  const [users, setUsers] = useState([]); // ลบ user จำลองออก
+  const [users, setUsers] = useState([]);
   const [role, setRole] = useState({});
   const [total, setTotal] = useState();
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -27,17 +34,29 @@ const AdminUserManagement = () => {
   const [filterStatus, setFilterStatus] = useState("all");
   const [originuser, setOriginuser] = useState("");
 
+  // Menu Upload States
+  const [showMenuUpload, setShowMenuUpload] = useState(false);
+  const [menuData, setMenuData] = useState({
+    name: "",
+    description: "",
+    price: "",
+    image: "",
+    category: "",
+  });
+  const [imagePreview, setImagePreview] = useState(null);
+
   // Form States
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [userRole, setUserRole] = useState("user");
-
+  const baseurl = process.env.NEXT_PUBLIC_BACKEND_URL;
   useEffect(() => {
     const admin = async () => {
-      const url = "http://localhost:4000";
+      const url =
+        "https://influential-denice-jitwisutthobut-4bb0d3cf.koyeb.app";
       try {
-        const res = await axios.get(`${url}/middleware/admin`, {
+        const res = await axios.get(`${baseurl}/middleware/admin`, {
           withCredentials: true,
         });
         console.log("Success");
@@ -59,9 +78,9 @@ const AdminUserManagement = () => {
   }, [router]);
 
   const fetchUser = async () => {
-    const url = "http://localhost:4000";
+    const url = "https://influential-denice-jitwisutthobut-4bb0d3cf.koyeb.app";
     try {
-      const res = await axios.get(`${url}/admin/getuser`, {
+      const res = await axios.get(`${baseurl}/admin/getuser`, {
         withCredentials: true,
       });
       if (res.status === 200) {
@@ -76,7 +95,7 @@ const AdminUserManagement = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    const url = "http://localhost:4000";
+    const url = "https://influential-denice-jitwisutthobut-4bb0d3cf.koyeb.app";
     try {
       const res = await axios.post(
         `${url}/admin/createuser`,
@@ -113,10 +132,10 @@ const AdminUserManagement = () => {
   };
 
   const updateUser = async () => {
-    const url = "http://localhost:4000";
+    const url = "https://influential-denice-jitwisutthobut-4bb0d3cf.koyeb.app";
     try {
       const res = await axios.post(
-        `${url}/admin/updateuser`,
+        `${baseurl}/admin/updateuser`,
         {
           username,
           email,
@@ -171,6 +190,75 @@ const AdminUserManagement = () => {
           : user
       )
     );
+  };
+
+  // Menu Upload Functions
+  const handleImageChange = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      setMenuData({ ...menuData, image: file });
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setImagePreview(reader.result);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleMenuSubmit = async (e) => {
+    e.preventDefault();
+    console.log("name:", menuData.name);
+    console.log("image:", menuData.image);
+    // ที่นี่คุณจะเพิ่ม API call สำหรับอัพโหลดเมนู
+
+    try {
+      // const res = await axios.post(`${url}/admin/upload-menu`, formData, {
+      //   withCredentials: true,
+      //   headers: { 'Content-Type': 'multipart/form-data' }
+      // });
+      const res = await axios.post(`${baseurl}/admin/upload-menu`, menuData, {
+        withCredentials: true,
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      if (res.status === 200) {
+        Swal.fire({
+          icon: "success",
+          title: "อัพโหลดเมนูสำเร็จ",
+          text: "เมนูใหม่ถูกเพิ่มเข้าระบบแล้ว",
+        });
+      }
+
+      // Reset form
+      setMenuData({
+        name: "",
+        description: "",
+        price: "",
+        image: "",
+      });
+      setImagePreview(null);
+      setShowMenuUpload(false);
+    } catch (error) {
+      console.error("Upload error:", error);
+      Swal.fire({
+        icon: "error",
+        title: "เกิดข้อผิดพลาด",
+        text: "ไม่สามารถอัพโหลดเมนูได้ กรุณาลองใหม่อีกครั้ง",
+      });
+    }
+  };
+
+  const resetMenuForm = () => {
+    setMenuData({
+      name: "",
+      description: "",
+      price: "",
+      category: "",
+      ingredients: "",
+      image: null,
+      isAvailable: true,
+    });
+    setImagePreview(null);
+    setShowMenuUpload(false);
   };
 
   const filteredUsers = users.filter((user) => {
@@ -265,6 +353,12 @@ const AdminUserManagement = () => {
           >
             <UserPlus className="w-4 h-4" /> เพิ่มผู้ใช้
           </button>
+          <button
+            onClick={() => setShowMenuUpload(true)}
+            className="bg-green-600 text-white px-4 py-2 rounded-md flex items-center gap-2"
+          >
+            <Upload className="w-4 h-4" /> อัพโหลดเมนู
+          </button>
         </div>
 
         {/* ฟอร์มสร้างหรือแก้ไขผู้ใช้ */}
@@ -322,6 +416,189 @@ const AdminUserManagement = () => {
               >
                 ยกเลิก
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* Menu Upload Modal */}
+        {showMenuUpload && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+              <div className="flex justify-between items-center p-6 border-b">
+                <h2 className="text-xl font-semibold flex items-center gap-2">
+                  <Upload className="w-5 h-5" />
+                  อัพโหลดเมนูอาหาร
+                </h2>
+                <button
+                  onClick={resetMenuForm}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              <form onSubmit={handleMenuSubmit} className="p-6 space-y-4">
+                {/* ชื่อเมนู */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <FileText className="w-4 h-4 inline mr-1" />
+                    ชื่อเมนู *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="กรอกชื่อเมนูอาหาร"
+                    value={menuData.name}
+                    onChange={(e) =>
+                      setMenuData({ ...menuData, name: e.target.value })
+                    }
+                  />
+                </div>
+
+                {/* รายละเอียด */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <FileText className="w-4 h-4 inline mr-1" />
+                    รายละเอียด
+                  </label>
+                  <textarea
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    rows="3"
+                    placeholder="รองเพียดของเมนูอาหาร"
+                    value={menuData.description}
+                    onChange={(e) =>
+                      setMenuData({ ...menuData, description: e.target.value })
+                    }
+                  />
+                </div>
+
+                {/* ราคาและหมวดหมู่ */}
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      <DollarSign className="w-4 h-4 inline mr-1" />
+                      ราคา (บาท) *
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min="0"
+                      step="0.01"
+                      className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="0.00"
+                      value={menuData.price}
+                      onChange={(e) =>
+                        setMenuData({ ...menuData, price: e.target.value })
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      <Tag className="w-4 h-4 inline mr-1" />
+                      หมวดหมู่ *
+                    </label>
+                    <select
+                      required
+                      className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      value={menuData.category}
+                      onChange={(e) =>
+                        setMenuData({ ...menuData, category: e.target.value })
+                      }
+                    >
+                      <option value="">เลือกหมวดหมู่</option>
+                      <option value="appetizer">อาหารว่าง</option>
+                      <option value="main">อาหารจานหลัก</option>
+                      <option value="dessert">ของหวาน</option>
+                      <option value="drink">เครื่องดื่ม</option>
+                      <option value="salad">สลัด</option>
+                      <option value="soup">ซุป</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* ส่วนผสม */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <Plus className="w-4 h-4 inline mr-1" />
+                    ส่วนผสม
+                  </label>
+                  <textarea
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    rows="2"
+                    placeholder="ระบุส่วนผสมหลัก (แยกด้วยเครื่องหมายจุลภาค)"
+                    value={menuData.ingredients}
+                    onChange={(e) =>
+                      setMenuData({ ...menuData, ingredients: e.target.value })
+                    }
+                  />
+                </div>
+
+                {/* รูปภาพ */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <Image className="w-4 h-4 inline mr-1" />
+                    รูปภาพเมนู
+                  </label>
+                  <div className="border-2 border-dashed border-gray-300 rounded-md p-4">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleImageChange}
+                      className="w-full"
+                    />
+                    {imagePreview && (
+                      <div className="mt-4">
+                        <img
+                          src={imagePreview}
+                          alt="Preview"
+                          className="max-w-full h-32 object-cover rounded-md"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* สถานะ */}
+                <div className="flex items-center">
+                  <input
+                    type="checkbox"
+                    id="isAvailable"
+                    checked={menuData.isAvailable}
+                    onChange={(e) =>
+                      setMenuData({
+                        ...menuData,
+                        isAvailable: e.target.checked,
+                      })
+                    }
+                    className="mr-2"
+                  />
+                  <label
+                    htmlFor="isAvailable"
+                    className="text-sm font-medium text-gray-700"
+                  >
+                    เมนูพร้อมขาย
+                  </label>
+                </div>
+
+                {/* ปุ่มบันทึก */}
+                <div className="flex gap-3 pt-4 border-t">
+                  <button
+                    type="submit"
+                    className="flex-1 bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700 transition-colors flex items-center justify-center gap-2"
+                  >
+                    <Upload className="w-4 h-4" />
+                    อัพโหลดเมนู
+                  </button>
+                  <button
+                    type="button"
+                    onClick={resetMenuForm}
+                    className="px-6 py-2 border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+                  >
+                    ยกเลิก
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         )}

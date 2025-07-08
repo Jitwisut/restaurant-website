@@ -70,7 +70,7 @@ export const Tablecontroller = {
       set.status = 400;
       return { message: "หมายเลขโต๊ะไม่ถูกต้อง" };
     }
-    console.log(number);
+    //(number);
     try {
       const result = await db
         .prepare(

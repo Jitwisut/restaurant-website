@@ -61,14 +61,26 @@ export const Authcontroller = {
 
       const token = await jwt.sign(payload);
       const refreshToken = await jwt.sign(payloadRefresh);
+      if (user.role === "kitchen") {
+        cookie.kitchen_auth.set({
+          value: token,
+          sameSite: "None",
+          httpOnly: true,
+          path: "/",
+          maxAge: 60 * 30,
+          secure: true,
+        });
+      } else {
+        cookie.auth.set({
+          value: token,
+          sameSite: "None",
+          httpOnly: true,
+          path: "/",
+          maxAge: 60 * 30,
+          secure: true,
+        });
+      }
 
-      cookie.auth.set({
-        value: token,
-        httpOnly: true,
-        path: "/",
-        maxAge: 60 * 30,
-        secure: process.env.NODE_ENV === "production",
-      });
       let redirectpath;
       if (user.role === "admin") {
         redirectpath = "/admin";
@@ -103,7 +115,7 @@ export const Authcontroller = {
     set: any;
   }) => {
     const { username, email, password, role } = body;
-    console.log("username", username);
+    //("username", username);
     if (!username || !email || !password || !role) {
       set.status = 400;
       return { message: "Error: Please complete all fields" };

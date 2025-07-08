@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import axios from "axios";
 
 /*— ตั้งฐาน URL ของ API —*/
-const API_BASE = process.env.NEXT_PUBLIC_API || "http://localhost:4000";
+const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL;
 
 /*— การ์ดสรุปจำนวนโต๊ะ —*/
 function SummaryCard({ icon, title, value, variant = "blue", subtitle }) {

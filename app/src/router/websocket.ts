@@ -33,7 +33,7 @@ export const web = (app: Elysia) => {
       // เก็บการเชื่อมต่อใน sockets และ clients
       sockets[role].set(username, (ws as any).raw);
       clients.set(username, { ws: (ws as any).raw, role });
-      console.log(`👋 ${username} (${role}) connected`);
+      //(`👋 ${username} (${role}) connected`);
 
       // แจ้งเตือนผู้ใช้เมื่อเชื่อมต่อสำเร็จ
       ws.send(
@@ -175,7 +175,7 @@ export const web = (app: Elysia) => {
         // ลบออกจาก sockets และ clients
         sockets[client.role].delete(username);
         clients.delete(username);
-        console.log(`🚪 ${username} (${client.role}) disconnected`);
+        //(`🚪 ${username} (${client.role}) disconnected`);
       }
     },
   });

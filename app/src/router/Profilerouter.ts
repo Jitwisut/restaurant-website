@@ -4,6 +4,7 @@ import { beforeadmin } from "../middleware/onlyadmin";
 export const profilerouter = (app: Elysia) => {
   return app.group("/profile", (app) => {
     app.get("/", Profilecontroller.getprofile);
+
     return app;
   });
 };

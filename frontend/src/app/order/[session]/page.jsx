@@ -21,11 +21,10 @@ import {
   TrendingUp,
   Award,
 } from "lucide-react";
-
+const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL;
 /* ------------ ตั้งค่าฐาน URL ของ API (จาก .env หรือ fallback) ------------ */
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
-const WS_BASE = process.env.NEXT_PUBLIC_API_WS || "ws://localhost:4000";
-
+const API = process.env.NEXT_PUBLIC_API_URL;
+const WS_BASE = process.env.NEXT_PUBLIC_API_WS;
 export default function OrderPage() {
   const wsRef = useRef(null);
   const [wsStatus, setWsStatus] = useState("กำลังเชื่อมต่อ...");
@@ -50,9 +49,12 @@ export default function OrderPage() {
   useEffect(() => {
     const loadTable = async () => {
       try {
-        const res = await axios.get(`${API}/tables/checktable/${sessionHash}`, {
-          withCredentials: true,
-        });
+        const res = await axios.get(
+          `${API_BASE}/tables/checktable/${sessionHash}`,
+          {
+            withCredentials: true,
+          }
+        );
         if (res.status === 200) setTable(res.data.table);
       } catch {
         alert("QR ไม่ถูกต้องหรือหมดอายุ");
@@ -63,7 +65,7 @@ export default function OrderPage() {
     };
     const loadMenu = async () => {
       try {
-        const { data } = await axios.get(`${API}/menu/get`, {
+        const { data } = await axios.get(`${API_BASE}/menu/get`, {
           withCredentials: true,
         });
         const list = Array.isArray(data)
@@ -149,7 +151,7 @@ export default function OrderPage() {
 
   const filteredMenu = getFilteredAndSortedMenu();
 
- /* const addToCart = (item) =>
+  /* const addToCart = (item) =>
     setCart((prev) => {
       const found = prev.find((i) => i.item.id === item.id);
       return found
@@ -159,26 +161,31 @@ export default function OrderPage() {
         : [...prev, { item, qty: 1 }];
     });*/
 
-    const addToCart = (item) => {
-  setCart((prevCart) => {
-    // หา index ของ item ใน cart
-    const index = prevCart.findIndex((i) => i.item.id === item.id);
+  const addToCart = (item) => {
+    setCart((prevCart) => {
+      // หา index ของ item ใน cart
+      const index = prevCart.findIndex((i) => i.item.id === item.id);
 
-    // ถ้ามีอยู่ใน cart แล้ว เพิ่ม qty
-    if (index !== -1) {
-      return prevCart.map((cartItem, idx) =>
-        idx === index
-          ? { ...cartItem, qty: cartItem.qty + 1 }
-          : cartItem
-      );
-    }
+      // ถ้ามีอยู่ใน cart แล้ว เพิ่ม qty
+      if (index !== -1) {
+        return prevCart.map((cartItem, idx) =>
+          idx === index ? { ...cartItem, qty: cartItem.qty + 1 } : cartItem
+        );
+      }
 
-    // ถ้ายังไม่มีใน cart เพิ่มใหม่
-    return [...prevCart, {table_number:table?.table_number, name:item.name,item, qty: 1,image:item.image}];
-  });
-};
-
-
+      // ถ้ายังไม่มีใน cart เพิ่มใหม่
+      return [
+        ...prevCart,
+        {
+          table_number: table?.table_number,
+          name: item.name,
+          item,
+          qty: 1,
+          image: item.image,
+        },
+      ];
+    });
+  };
 
   const changeQty = (id, delta) =>
     setCart((prev) =>
@@ -227,7 +234,12 @@ export default function OrderPage() {
         JSON.stringify({
           type: "order",
           menu: {
-            items: cart.map((c) => ({ id: c.item.id, qty: c.qty ,name:c.item.name,table_number:c.table_number})),
+            items: cart.map((c) => ({
+              id: c.item.id,
+              qty: c.qty,
+              name: c.item.name,
+              table_number: c.table_number,
+            })),
           },
         })
       );

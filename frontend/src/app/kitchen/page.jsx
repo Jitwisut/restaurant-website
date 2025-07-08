@@ -1,156 +1,234 @@
 "use client";
+/**
+ * Kitchen Dashboard – JSX Version (no TypeScript)
+ * ----------------------------------------------
+ * • เหมาะสำหรับโปรเจ็กต์ที่เซ็ตเป็น `.jsx` / ไม่มี TypeScript
+ * • Logic ทุกอย่างเหมือนเวอร์ชันก่อน แต่ตัด type annotation ออก
+ */
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import axios from "axios";
+import path from "path";
 
-/* WebSocket config */
-const WS_BASE = process.env.NEXT_PUBLIC_API_WS || "ws://localhost:4000";
-const KITCHEN_USERNAME = "kitchen1"; // เปลี่ยนเป็นชื่อ kitchen ที่ต้องการ
+/* -------------------- Constants -------------------- */
+const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL;
+const WS_BASE =
+  process.env.NEXT_PUBLIC_API_WS ||
+  "ws://influential-denice-jitwisutthobut-4bb0d3cf.koyeb.app";
 
-export default function KitchenPage() {
-  const wsRef = useRef(null);
- const [profile, setProfile] = useState(null);
-  const [connected, setConnected] = useState(false);
-  const [queue, setQueue] = useState([]);
-  const [wsMessages, setWsMessages] = useState([]);
-
-  // 1. ดึง profile ก่อน
+export default function KitchenDashboard() {
+  /* identity / state */
+  const [profile, setProfile] = useState(null); // { username, role, wsToken? }
+  const [loading, setLoading] = useState(true);
+  /* ---------- AUDIO ---------- */
+  const audioRef = useRef(null);
+  const [audioReady, setAudioReady] = useState(false);
+  const pendingPlays = useRef(0); // คิวเสียงที่เข้าก่อนปลดล็อก
+  /* สร้าง Audio ครั้งเดียวเมื่อ mount */
   useEffect(() => {
-    axios.get("http://localhost:4000/profile/", { withCredentials: true })
-      .then((r) => {
-        // สมมุติ r.data = { username: "kitchen1", role: "kitchen" }
-        setProfile({ username: r.data.username, role: r.data.role });
-      });
+    audioRef.current = new Audio("/sounds/notification.mp3");
+    audioRef.current.volume = 0.7;
   }, []);
 
-  // เชื่อมต่อ WebSocket
-  useEffect(() => {
-      if (!profile) return;
-     const ws = new WebSocket(`${WS_BASE}/ws/${profile.username}?role=${profile.role}`);
-    wsRef.current=ws
-    ws.onopen = () => setConnected(true);
-    ws.onclose = () => setConnected(false);
-    ws.onerror = () => setWsMessages((prev) => [...prev, "WS error"]);
+  /* ปลดล็อกเสียงเมื่อมี gesture แรก */
+  const unlockAudio = useCallback(() => {
+    if (!audioRef.current) return;
+    audioRef.current
+      .play() // เล่น 1 เฟรม → ถือว่ามี gesture
+      .then(() => {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+        setAudioReady(true);
+        // เล่นเสียงที่สะสมไว้ (ถ้ามี order มาก่อน)
+        while (pendingPlays.current-- > 0) {
+          audioRef.current.play().catch(console.error);
+        }
+        window.removeEventListener("pointerdown", unlockAudio);
+      })
+      .catch(console.error);
+  }, []);
 
-    ws.onmessage = (event) => {
+  /* ผูก listener ครั้งเดียว */
+  useEffect(() => {
+    window.addEventListener("pointerdown", unlockAudio, { once: true });
+    return () => window.removeEventListener("pointerdown", unlockAudio);
+  }, [unlockAudio]);
+  /* STEP 1: sessionStorage > STEP 2: /profile > STEP 3: prompt */
+  useEffect(() => {
+    const cached = sessionStorage.getItem("kitchenProfile");
+    if (cached) {
       try {
-        const data = JSON.parse(event.data);
-        if (data.type === "order") {
-          // เพิ่ม order ใหม่เข้า queue
-          setQueue((prev) => [
-            ...prev,
+        setProfile(JSON.parse(cached));
+        setLoading(false);
+        return;
+      } catch {
+        /* ignore */
+      }
+    }
+
+    axios
+      .get(`${API_BASE}/profile/`, { withCredentials: true })
+      .then((r) => {
+        const p = {
+          username: r.data.username,
+          role: r.data.role,
+          wsToken: r.data.wsToken,
+        };
+        sessionStorage.setItem("kitchenProfile", JSON.stringify(p));
+        setProfile(p);
+      })
+      .catch(() => {
+        const name = prompt("กรุณาใส่ชื่อครัว (เช่น kitchen1):")?.trim();
+        if (name) {
+          const p = { username: name, role: "kitchen" };
+          sessionStorage.setItem("kitchenProfile", JSON.stringify(p));
+          setProfile(p);
+        }
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  /* WebSocket */
+  const [connected, setConnected] = useState(false);
+  const [queue, setQueue] = useState([]); // [{ orderId, items }]
+  const wsRef = useRef(null);
+  const pingRef = useRef();
+  const retryRef = useRef({ attempts: 0, timer: null });
+
+  const connect = useCallback(() => {
+    if (!profile) return;
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
+
+    const url =
+      `${WS_BASE}/ws/${profile.username}?role=${profile.role}` +
+      (profile.wsToken ? `&token=${profile.wsToken}` : "");
+    const ws = new WebSocket(url);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      setConnected(true);
+      retryRef.current.attempts = 0;
+      pingRef.current = setInterval(() => {
+        ws.readyState === WebSocket.OPEN && ws.send("ping");
+      }, 30_000);
+    };
+
+    ws.onmessage = (e) => {
+      try {
+        const d = JSON.parse(e.data);
+        if (d.type === "order") {
+          playNotificationSound(); //เล่นเสียงการแจ้งเตือน
+          setQueue((q) => [
+            ...q,
             {
-              orderId: data.orderId || Date.now().toString(), // fallback id
-              from: data.from,
-              menu: data.menu,
-              timestamp: data.timestamp,
+              orderId: d.orderId || Date.now().toString(),
+              items: d.menu?.items || [],
             },
           ]);
+        } else if (d.type !== "pong") {
+          console.warn("WS message (system):", d);
         }
-        if (data.type === "system" || data.type === "error") {
-          setWsMessages((prev) => [...prev, data.message]);
-        }
-      } catch {
-        setWsMessages((prev) => [...prev, "WS: รับข้อมูลผิดพลาด"]);
+      } catch (err) {
+        console.error("WS: JSON parse error", err);
       }
     };
 
-    return () => ws.close();
-    // eslint-disable-next-line
+    ws.onclose = () => {
+      setConnected(false);
+      clearInterval(pingRef.current);
+      const delay = Math.min(2 ** retryRef.current.attempts * 1000, 30_000);
+      retryRef.current.attempts += 1;
+      retryRef.current.timer = setTimeout(connect, delay);
+    };
   }, [profile]);
 
-  // ส่งสถานะกลับไปยัง user
-  const sendStatus = useCallback((orderId, status) => {
-    if (wsRef.current && wsRef.current.readyState === window.WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: "status",
-          orderId,
-          status,
-        })
-      );
-      // อัปเดต queue (ลบ order ที่เสร็จแล้ว)
-      if (status === "done") {
-        setQueue((prev) => prev.filter((o) => o.orderId !== orderId));
-      }
-    }
-  }, []);
+  // ฟังก์ชันเล่นเสียงแจ้งเตือน
+  const playNotificationSound = () => {
+    // สร้าง Audio object ใหม่ทุกครั้ง
+    const audio = new Audio("/sounds/notification.mp3");
+    // ตั้งค่าเสียง
+    audio.volume = 0.7; // ระดับเสียง 0-1
+    audio.preload = "auto";
 
-  // (ไม่บังคับ) ดึง profile ของครัว
+    // เล่นเสียง
+    audio
+      .play()
+      .then(() => {
+        console.log("เล่นเสียงแจ้งเตือนสำเร็จ");
+      })
+      .catch((error) => {
+        console.error("ไม่สามารถเล่นเสียงได้:", error);
+      });
+  };
+
   useEffect(() => {
-    axios
-      .get("http://localhost:4000/profile/", { withCredentials: true })
-      .then((r) => console.log("profile:", r.data))
-      .catch(() => {});
-  }, []);
+    connect();
+    return () => {
+      wsRef.current?.close();
+      clearInterval(pingRef.current);
+      clearTimeout(retryRef.current.timer);
+    };
+  }, [connect]);
 
-  const getConnStatus = () => (connected ? "🟢 Connected" : "🔴 Disconnected");
+  const sendStatus = (orderId, status) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "status", orderId, status }));
+      if (status === "done")
+        setQueue((q) => q.filter((o) => o.orderId !== orderId));
+    }
+  };
+
+  /* UI */
+  if (loading) return <p className="p-6">กำลังโหลด…</p>;
+  if (!profile)
+    return <p className="p-6 text-red-600">ไม่สามารถระบุตัวครัวได้</p>;
 
   return (
-    <div className="min-h-screen px-8 py-6">
-      <h1 className="text-3xl font-bold mb-3">🍽️ Kitchen Dashboard</h1>
-      <p className="text-sm mb-6">
-        {getConnStatus()} | Queue: {queue.length}
-      </p>
-      {wsMessages.length > 0 && (
-        <ul className="text-xs text-gray-500 mb-4">
-          {wsMessages.map((msg, idx) => (
-            <li key={idx}>{msg}</li>
-          ))}
-        </ul>
-      )}
+    <div className="min-h-screen p-6 space-y-4">
+      <header className="flex items-center gap-4 text-xl font-bold">
+        🍽️ Kitchen —{" "}
+        <span className="text-base font-normal">{profile.username}</span>
+        <span className={connected ? "text-green-600" : "text-red-600"}>
+          {connected ? "● Online" : "● Offline"}
+        </span>
+      </header>
 
       {queue.length === 0 ? (
-        <p className="text-gray-500 mt-24 text-center">ยังไม่มีออร์เดอร์เข้ามา</p>
+        <p className="text-gray-500 mt-16 text-center">ยังไม่มีออร์เดอร์</p>
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
           {queue.map((o) => (
-            <OrderCard
-              key={o.orderId}
-              order={o}
-              onStart={() => sendStatus(o.orderId, "cooking")}
-              onDone={() => sendStatus(o.orderId, "done")}
-            />
+            <div key={o.orderId} className="border rounded-xl p-4 space-y-3">
+              <h2 className="font-semibold text-lg">
+                #{o.orderId.slice(0, 6)}
+              </h2>
+              <ul className="text-sm space-y-1">
+                {o.items.map((i) => (
+                  <li key={i.id} className="flex justify-between">
+                    <span>{i.name}</span>
+                    <span>x{i.qty}</span>
+                  </li>
+                ))}
+              </ul>
+              <div className="flex gap-2 pt-2 text-sm">
+                <button
+                  onClick={() => sendStatus(o.orderId, "cooking")}
+                  className="flex-1 bg-yellow-300/90 hover:bg-yellow-300 px-3 py-1 rounded"
+                >
+                  🍳 เริ่มทำ
+                </button>
+                <button
+                  onClick={() => sendStatus(o.orderId, "done")}
+                  className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white px-3 py-1 rounded"
+                >
+                  ✅ เสร็จแล้ว
+                </button>
+              </div>
+            </div>
           ))}
         </div>
       )}
-    </div>
-  );
-}
-
-function OrderCard({ order, onStart, onDone }) {
-  return (
-    <div className="border rounded-lg p-4 space-y-3">
-      <h2 className="font-semibold flex justify-between">
-        <span>#{order.orderId.slice(0, 6)}</span>
-    {/* สมมุติ order.from คือ หมายเลขโต๊ะ */}
-      <span className="text-xs text-gray-700 font-bold">
-  โต๊ะ: {order.menu.items?.[0]?.table_number || "-"}
-</span>
-      </h2>
-      <ul className="text-sm text-gray-700">
-        {(order.menu?.items || []).map( (i) => (
-          <li key={i.id} className="flex justify-between">  
-            <span>ชื่ออาหาร {i.name}</span>
- 
-            <span>{i.qty}</span>
-          </li>
-        ))}
-      </ul>
-      <div className="flex gap-2 pt-2">
-        <button
-          onClick={onStart}
-          className="flex-1 bg-yellow-400 px-3 py-1 rounded"
-        >
-          🍳 เริ่มทำ
-        </button>
-        <button
-          onClick={onDone}
-          className="flex-1 bg-emerald-500 px-3 py-1 rounded text-white"
-        >
-          ✅ เสร็จแล้ว
-        </button>
-      </div>
     </div>
   );
 }

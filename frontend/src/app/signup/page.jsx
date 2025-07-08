@@ -20,7 +20,8 @@ export default function SignupForm() {
     }
 
     try {
-      const url = "http://localhost:4000";
+      const url =
+        "https://influential-denice-jitwisutthobut-4bb0d3cf.koyeb.app";
 
       const res = await axios.post(
         `${url}/auth/signup`,

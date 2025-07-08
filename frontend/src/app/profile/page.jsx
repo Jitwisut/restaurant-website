@@ -8,7 +8,8 @@ export default function HomePage() {
   const [username, setUsername] = useState(""); // ← เปลี่ยนเป็นวิธีดึงชื่อจริงตามที่คุณต้องการ
   useEffect(() => {
     const fetchdata = async () => {
-      const url = "http://localhost:4000";
+      const url =
+        "https://influential-denice-jitwisutthobut-4bb0d3cf.koyeb.app";
       const res = await axios.get(`${url}/profile`, { withCredentials: true });
       if (res.status === 200) {
         setUsername(res.data.user);

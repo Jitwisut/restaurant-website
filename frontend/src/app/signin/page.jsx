@@ -18,7 +18,7 @@ export default function Home() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-
+  const baseurl = process.env.NEXT_PUBLIC_BACKEND_URL;
   const handleChange = (e) => {
     setUser({ ...user, [e.target.name]: e.target.value });
   };
@@ -28,10 +28,10 @@ export default function Home() {
     setLoading(true);
     setError("");
 
-    const url = "http://localhost:4000";
+    const url = "https://influential-denice-jitwisutthobut-4bb0d3cf.koyeb.app";
 
     try {
-      const res = await axios.post(`${url}/auth/signin`, user, {
+      const res = await axios.post(`${baseurl}/auth/signin`, user, {
         withCredentials: true,
       });
 
