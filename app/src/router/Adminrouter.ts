@@ -10,7 +10,9 @@ export const Adminrouter = (app: Elysia) => {
       .get("/getuser", Admincontroller.getalluser)
       .post("/updateuser", Admincontroller.updateuser)
       .post("/createuser", Admincontroller.createuser)
-      .post("/upload-menu", Admincontroller.uploaddata);
+      .post("/upload-menu", Admincontroller.uploaddata)
+      .post("/deleteuser", Admincontroller.deletedata);
+
     return app;
   });
 };

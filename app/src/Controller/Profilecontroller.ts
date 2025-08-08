@@ -29,17 +29,26 @@ export const Profilecontroller = {
     return { message: "Success", user: user, role: role };
   },
   getkitchenprofile: async (context: Context) => {
-    const { jwt, cookie, set } = context as AppContext;
-    const token = cookie.kitchen_auth.value;
+    const { store, jwt, cookie, set, headers } = context as AppContext;
+
+    const authhead = headers["authorization"];
+    const token = authhead?.split(" ")[1];
+
     if (!token) {
       set.status = 401;
-      return { message: "Please login" };
+      return { message: "Unauthorized: Please login" };
     }
+
     const decode = await jwt.verify(token);
-    //(decode);
-    const user = decode.username;
-    const role = decode.role;
-    set.status = 200;
-    return { message: "Success", user: user, role: role };
+
+    if (decode.role !== "kitchen") {
+      set.status = 403;
+      return { message: "Forbidden: Not an kitchen" };
+    }
+    return {
+      message: "You are kitchen",
+      role: decode.role,
+      username: decode.username,
+    };
   },
 };

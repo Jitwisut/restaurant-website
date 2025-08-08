@@ -28,14 +28,18 @@ export default function Home() {
     setLoading(true);
     setError("");
 
-    const url = "https://influential-denice-jitwisutthobut-4bb0d3cf.koyeb.app";
-
     try {
       const res = await axios.post(`${baseurl}/auth/signin`, user, {
         withCredentials: true,
       });
 
       if (res.status === 200) {
+        if (res.data.redirectpath === "/kitchen") {
+          sessionStorage.setItem("kitchenProfile", res.data.token);
+        } else {
+          sessionStorage.setItem("auth", res.data.token);
+        }
+
         router.push(res.data.redirectpath);
       }
     } catch (error) {

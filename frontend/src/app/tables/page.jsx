@@ -165,6 +165,7 @@ export default function TableManagement() {
       const { data } = await axios.get(`${API_BASE}/tables/gettable`, {
         withCredentials: true,
       });
+      console.log(data);
       setTables(data.tables);
       setFilteredTables(data.tables);
     } catch (err) {
@@ -514,7 +515,7 @@ export default function TableManagement() {
                     QR Link Status
                   </p>
                   <p className="text-xs font-mono break-all text-gray-800">
-                    {t.fullurl ? "🟢 มี QR Code" : "🔴 ยังไม่มี QR Code"}
+                    {t.qr_code_url ? "🟢 มี QR Code" : "🔴 ยังไม่มี QR Code"}
                   </p>
                 </div>
               </div>
@@ -580,10 +581,12 @@ export default function TableManagement() {
                 </span>
                 <span
                   className={`text-xs font-bold ${
-                    selectedTable.fullurl ? "text-green-600" : "text-red-600"
+                    selectedTable.qr_code_url
+                      ? "text-green-600"
+                      : "text-red-600"
                   }`}
                 >
-                  {selectedTable.fullurl ? "🟢 มี" : "🔴 ไม่มี"}
+                  {selectedTable.qr_code_url ? "🟢 มี" : "🔴 ไม่มี"}
                 </span>
               </div>
             </div>
@@ -611,7 +614,7 @@ export default function TableManagement() {
                 </ActionButton>
               )}
 
-              {selectedTable.fullurl && (
+              {selectedTable.qr_code_url && (
                 <ActionButton
                   color="blue"
                   icon="📱"

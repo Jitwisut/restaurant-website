@@ -1,62 +1,91 @@
 "use client";
-/**
- * Kitchen Dashboard – JSX Version (no TypeScript)
- * ----------------------------------------------
- * • เหมาะสำหรับโปรเจ็กต์ที่เซ็ตเป็น `.jsx` / ไม่มี TypeScript
- * • Logic ทุกอย่างเหมือนเวอร์ชันก่อน แต่ตัด type annotation ออก
- */
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import axios from "axios";
-import path from "path";
 
 /* -------------------- Constants -------------------- */
 const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL;
-const WS_BASE =
-  process.env.NEXT_PUBLIC_API_WS ||
-  "ws://influential-denice-jitwisutthobut-4bb0d3cf.koyeb.app";
+const WS_BASE = process.env.NEXT_PUBLIC_API_WS;
 
 export default function KitchenDashboard() {
   /* identity / state */
   const [profile, setProfile] = useState(null); // { username, role, wsToken? }
   const [loading, setLoading] = useState(true);
+  const [tablenumber, setTablenumber] = useState("");
   /* ---------- AUDIO ---------- */
   const audioRef = useRef(null);
   const [audioReady, setAudioReady] = useState(false);
   const pendingPlays = useRef(0); // คิวเสียงที่เข้าก่อนปลดล็อก
+
   /* สร้าง Audio ครั้งเดียวเมื่อ mount */
   useEffect(() => {
-    audioRef.current = new Audio("/sounds/notification.mp3");
-    audioRef.current.volume = 0.7;
-  }, []);
+    // ตรวจสอบว่า `audioRef.current` ยังไม่มีค่าก่อนที่จะสร้าง Audio object ใหม่
+    // เพื่อให้แน่ใจว่ามันถูกสร้างเพียงครั้งเดียวต่อการโหลดคอมโพเนนต์
+    if (!audioRef.current) {
+      audioRef.current = new Audio("/sounds/notification.mp3");
+      audioRef.current.volume = 0.7;
+    }
+  }, []); // [] เพื่อให้รันแค่ครั้งเดียวตอน mount
+
+  /* ฟังก์ชันเล่นเสียงแจ้งเตือน */
+  const playNotificationSound = useCallback(() => {
+    if (audioReady && audioRef.current) {
+      audioRef.current.currentTime = 0; // รีเซ็ตเสียงไปที่จุดเริ่มต้น
+      audioRef.current
+        .play()
+        .then(() => {
+          console.log("เล่นเสียงแจ้งเตือนสำเร็จ");
+        })
+        .catch((error) => {
+          console.error("ไม่สามารถเล่นเสียงได้ (ปลดล็อกแล้ว):", error);
+        });
+    } else {
+      // ถ้าเสียงยังไม่พร้อม (ยังไม่ถูกปลดล็อก) ให้เพิ่มเข้าคิว
+      pendingPlays.current++;
+      console.warn("เสียงยังไม่พร้อมเล่น เพิ่มเข้าคิว", pendingPlays.current);
+    }
+  }, [audioReady]); // ให้ฟังก์ชันนี้สร้างใหม่เมื่อ audioReady เปลี่ยน
 
   /* ปลดล็อกเสียงเมื่อมี gesture แรก */
   const unlockAudio = useCallback(() => {
-    if (!audioRef.current) return;
-    audioRef.current
-      .play() // เล่น 1 เฟรม → ถือว่ามี gesture
-      .then(() => {
-        audioRef.current.pause();
-        audioRef.current.currentTime = 0;
-        setAudioReady(true);
-        // เล่นเสียงที่สะสมไว้ (ถ้ามี order มาก่อน)
-        while (pendingPlays.current-- > 0) {
-          audioRef.current.play().catch(console.error);
-        }
-        window.removeEventListener("pointerdown", unlockAudio);
-      })
-      .catch(console.error);
-  }, []);
+    if (!audioRef.current || audioReady) return; // ถ้า audioRef ยังไม่พร้อม หรือปลดล็อกไปแล้ว ก็ไม่ต้องทำอะไร
 
-  /* ผูก listener ครั้งเดียว */
+    audioRef.current
+      .play() // พยายามเล่นเสียง
+      .then(() => {
+        audioRef.current.pause(); // หยุดทันที
+        audioRef.current.currentTime = 0; // รีเซ็ตตำแหน่ง
+        setAudioReady(true); // ตั้งสถานะว่าเสียงพร้อมแล้ว
+        console.log("เสียงปลดล็อกสำเร็จแล้ว!");
+
+        // เล่นเสียงที่สะสมไว้ (ถ้ามี order มาก่อน gesture)
+        while (pendingPlays.current > 0) {
+          audioRef.current.play().catch(console.error);
+          pendingPlays.current--;
+        }
+        window.removeEventListener("pointerdown", unlockAudio); // ลบ listener หลังจากปลดล็อก
+      })
+      .catch((error) => {
+        console.error("ไม่สามารถปลดล็อกเสียงได้:", error);
+        // อาจจะแสดงข้อความให้ผู้ใช้แตะเพื่อปลดล็อกเสียงอีกครั้ง
+      });
+  }, [audioReady]);
+
+  /* ผูก listener สำหรับ gesture แรก */
   useEffect(() => {
-    window.addEventListener("pointerdown", unlockAudio, { once: true });
-    return () => window.removeEventListener("pointerdown", unlockAudio);
-  }, [unlockAudio]);
+    // ผูก listener เฉพาะเมื่อเสียงยังไม่พร้อม
+    if (!audioReady) {
+      window.addEventListener("pointerdown", unlockAudio, { once: true });
+    }
+    return () => {
+      window.removeEventListener("pointerdown", unlockAudio);
+    };
+  }, [unlockAudio, audioReady]);
+
   /* STEP 1: sessionStorage > STEP 2: /profile > STEP 3: prompt */
   useEffect(() => {
-    const cached = sessionStorage.getItem("kitchenProfile");
-    if (cached) {
+    const token = sessionStorage.getItem("kitchenProfile");
+    if (token) {
       try {
         setProfile(JSON.parse(cached));
         setLoading(false);
@@ -67,13 +96,15 @@ export default function KitchenDashboard() {
     }
 
     axios
-      .get(`${API_BASE}/profile/`, { withCredentials: true })
+      .get(`${API_BASE}/profile/kitchenprofile`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
       .then((r) => {
         const p = {
           username: r.data.username,
           role: r.data.role,
-          wsToken: r.data.wsToken,
         };
+
         sessionStorage.setItem("kitchenProfile", JSON.stringify(p));
         setProfile(p);
       })
@@ -117,7 +148,7 @@ export default function KitchenDashboard() {
       try {
         const d = JSON.parse(e.data);
         if (d.type === "order") {
-          playNotificationSound(); //เล่นเสียงการแจ้งเตือน
+          playNotificationSound(); // <-- เรียกใช้ฟังก์ชันเล่นเสียงที่ถูกต้อง
           setQueue((q) => [
             ...q,
             {
@@ -140,26 +171,7 @@ export default function KitchenDashboard() {
       retryRef.current.attempts += 1;
       retryRef.current.timer = setTimeout(connect, delay);
     };
-  }, [profile]);
-
-  // ฟังก์ชันเล่นเสียงแจ้งเตือน
-  const playNotificationSound = () => {
-    // สร้าง Audio object ใหม่ทุกครั้ง
-    const audio = new Audio("/sounds/notification.mp3");
-    // ตั้งค่าเสียง
-    audio.volume = 0.7; // ระดับเสียง 0-1
-    audio.preload = "auto";
-
-    // เล่นเสียง
-    audio
-      .play()
-      .then(() => {
-        console.log("เล่นเสียงแจ้งเตือนสำเร็จ");
-      })
-      .catch((error) => {
-        console.error("ไม่สามารถเล่นเสียงได้:", error);
-      });
-  };
+  }, [profile, playNotificationSound]); // เพิ่ม playNotificationSound ใน dependency array
 
   useEffect(() => {
     connect();
@@ -200,9 +212,7 @@ export default function KitchenDashboard() {
         <div className="grid gap-4 md:grid-cols-2">
           {queue.map((o) => (
             <div key={o.orderId} className="border rounded-xl p-4 space-y-3">
-              <h2 className="font-semibold text-lg">
-                #{o.orderId.slice(0, 6)}
-              </h2>
+              <h2 className="font-semibold text-lg"></h2>
               <ul className="text-sm space-y-1">
                 {o.items.map((i) => (
                   <li key={i.id} className="flex justify-between">

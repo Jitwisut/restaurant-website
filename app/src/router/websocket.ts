@@ -79,7 +79,7 @@ export const web = (app: Elysia) => {
           sender.role === "user"
         ) {
           // จัดการคำสั่งอาหาร (ส่งไปยังทุก kitchen)
-          const { menu } = parsedMsg;
+          const { menu, table_number } = parsedMsg;
 
           // ค้นหาทุก kitchen
           const kitchenClients = Array.from(sockets.kitchen.entries());
@@ -92,6 +92,7 @@ export const web = (app: Elysia) => {
                   type: "order",
                   from: username,
                   menu,
+                  table_number,
                   timestamp: new Date().toISOString(),
                 })
               );

@@ -2,6 +2,7 @@ import { Elysia } from "elysia";
 
 export const afterhanlerUser = async ({ store, jwt, set, cookie }: any) => {
   const token = cookie.auth.value;
+  console.warn("token", token);
   if (!token) {
     console.warn("No token in cookie, skipping afterHandle");
 

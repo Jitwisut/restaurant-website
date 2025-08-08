@@ -5,12 +5,13 @@ import { useEffect, useState } from "react";
 
 export default function HomePage() {
   const [showName, setShowName] = useState(false);
-  const [username, setUsername] = useState(""); // ← เปลี่ยนเป็นวิธีดึงชื่อจริงตามที่คุณต้องการ
+  const [username, setUsername] = useState("");
+  const baseurl = process.env.NEXT_PUBLIC_BACKEND_URL;
   useEffect(() => {
     const fetchdata = async () => {
-      const url =
-        "https://influential-denice-jitwisutthobut-4bb0d3cf.koyeb.app";
-      const res = await axios.get(`${url}/profile`, { withCredentials: true });
+      const res = await axios.get(`${baseurl}/profile`, {
+        withCredentials: true,
+      });
       if (res.status === 200) {
         setUsername(res.data.user);
       }

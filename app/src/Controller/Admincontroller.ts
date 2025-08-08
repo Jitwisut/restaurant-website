@@ -121,4 +121,26 @@ export const Admincontroller = {
 
     return { message: "Success" };
   },
+  deletedata: async ({
+    body,
+    set,
+  }: {
+    body: { username: string };
+    set: Context["set"];
+  }) => {
+    const { username } = body;
+    if (!username) {
+      set.status = 400;
+      return { message: "Please Enter username" };
+    }
+    const query = "DELETE FROM user WHERE username=?";
+    const result = db.prepare(query).run(username);
+    if (!result.changes) {
+      console.warn("ไม่พบผู้ใช้ที่จะลบ");
+    } else {
+      console.log("แก้ไขเรียบร้อย");
+    }
+    set.status = 201;
+    return { message: "Success Delete user" };
+  },
 };

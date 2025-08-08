@@ -3,47 +3,52 @@ import { customAlphabet } from "nanoid";
 import { Context } from "elysia";
 import QRCode from "qrcode";
 import crypto from "crypto";
-const db = new Database("restaurant.sqlite");
+const baseurl = Bun.env.ORIGIN_URL;
+const db = new Database("restaurant.sqlite") as any;
 const nanoid = customAlphabet("1234567890abcdef", 8);
 export const Tablecontroller = {
   gettable: async ({ set }: Context) => {
     const query = "SELECT * FROM tables";
     const result = await db.query(query).all();
     set.status = 200;
+
     return { tables: result };
   },
   opentable: async ({ set, body }: any) => {
-    const tableNumber = body.number?.trim();
-    if (!/^\d{1,2}$/.test(tableNumber ?? "")) {
+    const rawNumber = body.number?.trim();
+    const tableNumber = parseInt(rawNumber ?? "", 10);
+    const paddedNumber = tableNumber.toString().padStart(2, "0"); // 2 → "02"
+
+    if (isNaN(tableNumber) || tableNumber < 1 || tableNumber > 99) {
       set.status = 400;
       return { message: "หมายเลขโต๊ะไม่ถูกต้อง" };
     }
-    const hash = nanoid(10); // hash สำหรับ session
+
+    const hash = nanoid(10); // session hash
     const qrPath = `/order/${hash}`;
-    const bashurl = "http://localhost:3000";
-    const fullURL = `${bashurl}${qrPath}`;
+    const fullURL = `${baseurl}${qrPath}`;
 
     try {
-      const qrBase64 = await QRCode.toDataURL(fullURL);
+      const qrBase64 = await QRCode.toDataURL(fullURL); // ✅ async (คงไว้)
 
-      const result = await db
-        .prepare(
-          `
-        UPDATE tables
-        SET status          = 'open',
-            opened_at       = CURRENT_TIMESTAMP,
-            customer_session= ?,        -- เก็บ hash ตรงนี้
-            qr_code_url     = ?
-        WHERE table_number  = ?
-          AND status        = 'available'
-      `
-        )
-        .run(hash, qrBase64, tableNumber);
+      const stmt = db.prepare(`
+      UPDATE tables
+         SET status           = 'open',
+             opened_at        = CURRENT_TIMESTAMP,
+             customer_session = ?,
+             qr_code_url      = ?
+       WHERE table_number     = ?
+         AND status           = 'available'
+    `);
 
-      if (result.changes === 0) {
-        set.status = 409; // Conflict
+      stmt.run(hash, qrBase64, paddedNumber); // ❌ ห้าม await, เป็น sync
+      const changes = db.changes;
+
+      if (changes === 0) {
+        set.status = 409;
         return { message: "โต๊ะนี้ถูกเปิดแล้วหรือไม่พบ" };
       }
+
       return {
         message: "เปิดโต๊ะสำเร็จ",
         table_number: tableNumber,
@@ -52,7 +57,7 @@ export const Tablecontroller = {
         fullurl: fullURL,
       };
     } catch (err) {
-      console.error(err);
+      console.error("❌ opentable error:", err);
       set.status = 500;
       return { message: "เกิดข้อผิดพลาดภายในเซิร์ฟเวอร์" };
     }
@@ -64,41 +69,45 @@ export const Tablecontroller = {
     set: Context["set"];
     body: { number: string };
   }) => {
-    const number = body.number?.trim();
-
-    if (!/^\d{1,2}$/.test(number ?? "")) {
+    const rawNumber = body.number?.trim();
+    const tableNumber = parseInt(rawNumber ?? "", 10);
+    const paddedNumber = tableNumber.toString().padStart(2, "0"); // 2 → "02"
+    if (isNaN(tableNumber) || tableNumber < 1 || tableNumber > 99) {
       set.status = 400;
       return { message: "หมายเลขโต๊ะไม่ถูกต้อง" };
     }
-    //(number);
-    try {
-      const result = await db
-        .prepare(
-          `
-        UPDATE tables
-        SET    status           = 'available',
-               opened_at        = NULL,
-               qr_code_url      = NULL,
-               customer_session = NULL
-        WHERE  table_number     = ?
-          AND  status <> 'available'
-      `
-        )
-        .run(number);
 
-      if (result.changes === 0) {
+    try {
+      const stmt = db.prepare(`
+      UPDATE tables
+         SET status           = 'available',
+             opened_at        = NULL,
+             qr_code_url      = NULL,
+             customer_session = NULL
+       WHERE table_number     = ?
+         AND status <> 'available'
+    `);
+
+      stmt.run(paddedNumber); // ✅ ใช้แบบ sync เท่านั้น
+      const changes = db.changes; // ✅ fallback ปลอดภัย
+
+      if (changes === 0) {
         set.status = 404;
         return { message: "โต๊ะนี้ไม่มีข้อมูลหรือว่างอยู่แล้ว" };
       }
 
-      return { message: "ปิดโต๊ะเรียบร้อย", table_number: number };
+      return { message: "ปิดโต๊ะเรียบร้อย", table_number: tableNumber };
     } catch (err) {
-      console.error(err);
+      console.error("❌ closetable error:", (err as Error).message);
       set.status = 500;
-      return { message: "เกิดข้อผิดพลาดภายในเซิร์ฟเวอร์" };
+      return {
+        message: "เกิดข้อผิดพลาดภายในเซิร์ฟเวอร์",
+        Error: (err as Error).message,
+      };
     }
   },
-  checktabel: async ({
+
+  checktabel: ({
     set,
     params,
   }: {
@@ -106,17 +115,23 @@ export const Tablecontroller = {
     params: Context["params"];
   }) => {
     const hashcode = params.session;
-
+    console.log(hashcode);
     if (!hashcode) {
       set.status = 400;
       return { message: "ไม่พบ hashcode" };
     }
-    const query = "SELECT * FROM tables WHERE customer_session=?";
-    const result = await db.prepare(query).get(hashcode);
+    const re = db.prepare("SELECT * FROM tables");
+    const reu = re.all();
+    console.log("db:", reu);
+    const query = "SELECT * FROM tables WHERE customer_session = ?";
+    const stmt = db.prepare(query);
+    const result = stmt.get(hashcode); // ✅ sync: ไม่มี await
+    console.log("result", result);
     if (!result) {
       set.status = 404;
       return { message: "ไม่พบโต๊ะ" };
     }
+
     set.status = 200;
     return { message: "พบโต๊ะ", table: result };
   },

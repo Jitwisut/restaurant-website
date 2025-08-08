@@ -10,7 +10,7 @@ export default function SignupForm() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [username, setUsername] = useState("");
-
+  const baseurl = process.env.NEXT_PUBLIC_BACKEND_URL;
   const handleSubmit = async (e) => {
     e.preventDefault();
 
@@ -20,11 +20,8 @@ export default function SignupForm() {
     }
 
     try {
-      const url =
-        "https://influential-denice-jitwisutthobut-4bb0d3cf.koyeb.app";
-
       const res = await axios.post(
-        `${url}/auth/signup`,
+        `${baseurl}/auth/signup`,
         {
           username,
           password,
