@@ -5,14 +5,13 @@ export const beforeadmin = async (context: Context) => {
 
   const authhead = headers["authorization"];
   const token = authhead?.split(" ")[1];
-
   if (!token) {
     set.status = 401;
     return { message: "Unauthorized: Please login" };
   }
 
   const decode = await jwt.verify(token);
-  store.decode = { decode };
+  
 
   if (decode.role !== "admin") {
     set.status = 403;

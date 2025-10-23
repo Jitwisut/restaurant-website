@@ -166,7 +166,8 @@ export default function TableManagement() {
         withCredentials: true,
       });
       console.log(data);
-      setTables(data.tables);
+      //จัดเรียงข้อมูลก่อนบันทึกลงตาราง
+      setTables(data.tables.sort((a,b)=>a.table_number-b.table_number));
       setFilteredTables(data.tables);
     } catch (err) {
       console.error("Error fetching tables:", err);

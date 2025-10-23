@@ -35,7 +35,7 @@ app
     set.headers["Content-Security-Policy"] =
       "default-src 'self'; connect-src 'self' https://backend-restaurant-deploy.onrender.com https://frontend-restaurant-97nb.vercel.app";
   })
-  /* ③ ปลั๊กอินอื่น ๆ ต่อจากนี้ */
+  
   .use(elysiaHelmet({}))
 
   .use(

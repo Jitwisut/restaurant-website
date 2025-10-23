@@ -8,9 +8,11 @@
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "elysia": "latest",
+    "pg": "^8.16.3",
     "sqlite3": "^5.1.7"
   },
   "devDependencies": {
+    "@types/pg": "^8.15.5",
     "bun-types": "latest"
   },
   "module": "app/src/index.js"

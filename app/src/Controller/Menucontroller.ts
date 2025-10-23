@@ -1,11 +1,11 @@
 import { Context } from "elysia";
-import { Database } from "bun:sqlite";
-const db = new Database("restaurant.sqlite");
+import { getDB } from "../lib/connect";
+const db = getDB();
 export const menucontroller = {
-  getmenu: ({ set }: { set: Context["set"] }) => {
+  getmenu: async ({ set }: { set: Context["set"] }) => {
     const query = "SELECT * FROM menu_new";
-    const result = db.prepare(query).all();
-    const menu = result.map((r: any) => {
+    const result = await db.query(query);
+    const menu = result.rows.map((r: any) => {
       const base64 = r.image_blob
         ? Buffer.from(r.image_blob).toString("base64")
         : null;

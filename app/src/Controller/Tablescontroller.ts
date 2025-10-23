@@ -1,21 +1,21 @@
-import { Database } from "bun:sqlite";
+
 import { customAlphabet } from "nanoid";
 import { Context } from "elysia";
 import QRCode from "qrcode";
-import crypto from "crypto";
+import { getDB } from "../lib/connect";
 const baseurl = Bun.env.ORIGIN_URL;
-const db = new Database("restaurant.sqlite") as any;
+const db = getDB();
 const nanoid = customAlphabet("1234567890abcdef", 8);
 export const Tablecontroller = {
   gettable: async ({ set }: Context) => {
     const query = "SELECT * FROM tables";
-    const result = await db.query(query).all();
+    const result = await db.query(query);
     set.status = 200;
 
-    return { tables: result };
+    return { tables: result.rows };
   },
   opentable: async ({ set, body }: any) => {
-    const rawNumber = body.number?.trim();
+    const rawNumber = body.number;
     const tableNumber = parseInt(rawNumber ?? "", 10);
     const paddedNumber = tableNumber.toString().padStart(2, "0"); // 2 → "02"
 
@@ -31,21 +31,22 @@ export const Tablecontroller = {
     try {
       const qrBase64 = await QRCode.toDataURL(fullURL); // ✅ async (คงไว้)
 
-      const stmt = db.prepare(`
-      UPDATE tables
-         SET status           = 'open',
-             opened_at        = CURRENT_TIMESTAMP,
-             customer_session = ?,
-             qr_code_url      = ?
-       WHERE table_number     = ?
-         AND status           = 'available'
-    `);
+      const result = await db.query(
+        `
+  UPDATE tables
+     SET status           = 'open',
+         opened_at        = NOW(),
+         customer_session = $1,
+         qr_code_url      = $2
+   WHERE table_number     = $3
+     AND status           = 'available'
+   RETURNING table_number, status, opened_at, customer_session, qr_code_url
+  `,
+        [hash, qrBase64, paddedNumber]
+      );
 
-      stmt.run(hash, qrBase64, paddedNumber); // ❌ ห้าม await, เป็น sync
-      const changes = db.changes;
-
-      if (changes === 0) {
-        set.status = 409;
+      if (result.rowCount === 0) {
+        set.status = 409; // Conflict
         return { message: "โต๊ะนี้ถูกเปิดแล้วหรือไม่พบ" };
       }
 
@@ -69,7 +70,7 @@ export const Tablecontroller = {
     set: Context["set"];
     body: { number: string };
   }) => {
-    const rawNumber = body.number?.trim();
+    const rawNumber = body.number;
     const tableNumber = parseInt(rawNumber ?? "", 10);
     const paddedNumber = tableNumber.toString().padStart(2, "0"); // 2 → "02"
     if (isNaN(tableNumber) || tableNumber < 1 || tableNumber > 99) {
@@ -78,20 +79,20 @@ export const Tablecontroller = {
     }
 
     try {
-      const stmt = db.prepare(`
+      const stmt = db.query(
+        `
       UPDATE tables
          SET status           = 'available',
              opened_at        = NULL,
              qr_code_url      = NULL,
              customer_session = NULL
-       WHERE table_number     = ?
+       WHERE table_number     = $1
          AND status <> 'available'
-    `);
+    `,
+        [paddedNumber]
+      );
 
-      stmt.run(paddedNumber); // ✅ ใช้แบบ sync เท่านั้น
-      const changes = db.changes; // ✅ fallback ปลอดภัย
-
-      if (changes === 0) {
+      if (stmt.rowCount === 0) {
         set.status = 404;
         return { message: "โต๊ะนี้ไม่มีข้อมูลหรือว่างอยู่แล้ว" };
       }
@@ -107,7 +108,7 @@ export const Tablecontroller = {
     }
   },
 
-  checktabel: ({
+  checktabel: async ({
     set,
     params,
   }: {
@@ -120,19 +121,19 @@ export const Tablecontroller = {
       set.status = 400;
       return { message: "ไม่พบ hashcode" };
     }
-    const re = db.prepare("SELECT * FROM tables");
-    const reu = re.all();
-    console.log("db:", reu);
-    const query = "SELECT * FROM tables WHERE customer_session = ?";
-    const stmt = db.prepare(query);
-    const result = stmt.get(hashcode); // ✅ sync: ไม่มี await
+    const re = db.query("SELECT * FROM tables");
+
+    const query = "SELECT * FROM tables WHERE customer_session = $1";
+    const result = await db.query(query, [hashcode]);
+
     console.log("result", result);
-    if (!result) {
+    if (result.rowCount === 0) {
       set.status = 404;
       return { message: "ไม่พบโต๊ะ" };
     }
-
+    //ดึงข้อมูลแถวแรกออกมา
+    const table = result.rows[0];
     set.status = 200;
-    return { message: "พบโต๊ะ", table: result };
+    return { message: "พบโต๊ะ", table: table };
   },
 };

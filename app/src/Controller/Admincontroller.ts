@@ -2,13 +2,15 @@ import { Context } from "elysia";
 import { Database } from "bun:sqlite";
 import bcryptjs from "bcryptjs";
 import { join } from "path";
+import { getDB } from "../lib/connect";
 import { mkdir, writeFile } from "fs/promises";
-const db = new Database("user.sqlite");
-const dbres = new Database("restaurant.sqlite");
+const db = getDB();
 export const Admincontroller = {
   getalluser: async ({ set }: Context) => {
     try {
-      let usersRaw = db.query("SELECT * FROM user").all();
+      // ใช้ await สำหรับ async query ใน PostgreSQL
+      const result = await db.query("SELECT * FROM users");
+      const usersRaw = result.rows;
 
       // ตรวจสอบความถูกต้องก่อนใช้
       if (!Array.isArray(usersRaw)) {
@@ -18,8 +20,12 @@ export const Admincontroller = {
       const users = usersRaw as { role: string }[];
       const total = users.length;
 
+      // นับจำนวน role แต่ละประเภท
       const roles = users.reduce((acc: Record<string, number>, user) => {
-        acc[user.role] = (acc[user.role] || 0) + 1;
+        if (user.role) {
+          // ตรวจสอบว่า role มีค่า
+          acc[user.role] = (acc[user.role] || 0) + 1;
+        }
         return acc;
       }, {});
 
@@ -32,7 +38,10 @@ export const Admincontroller = {
     } catch (error) {
       console.error("Backend error:", (error as Error).message);
       set.status = 500;
-      return { message: "เกิดข้อผิดพลาด", detail: (error as Error).message };
+      return {
+        message: "เกิดข้อผิดพลาดในการดึงข้อมูลผู้ใช้",
+        detail: (error as Error).message,
+      };
     }
   },
   updateuser: async ({
@@ -46,8 +55,8 @@ export const Admincontroller = {
       const { originuser, username, email, role } = body;
 
       const query =
-        "UPDATE user SET username=?, email=?, role=? WHERE username=?";
-      const result = db.prepare(query).run(username, email, role, originuser);
+        "UPDATE users SET username=$1, email=$2, role=$3 WHERE username=$4";
+      const result = await db.query(query, [username, email, role, originuser]);
 
       set.status = 200;
       return { message: `Success update user ${username}` };
@@ -68,19 +77,34 @@ export const Admincontroller = {
       set.status = 400;
       return { message: "Please fill all field" };
     }
+
     try {
-      let query = "SELECT * FROM user WHERE username=?";
-      const user = db.prepare(query).get(body.username);
-      if (user) {
+      let query = "SELECT * FROM users WHERE username=$1";
+      let checkemail = "SELECT email from users WHERE email=$1";
+      const resultemail = await db.query(checkemail, [body.email]);
+      const user = await db.query(query, [body.username]);
+      if (user.rowCount > 0) {
         set.status = 400;
         return { message: "Username already exist" };
       }
+      if (resultemail.rowCount > 0) {
+        set.status = 400;
+        return { message: "Email already exist" };
+      }
       const hashpass = await bcryptjs.hash(body.password, 10);
+      const email = body.email.trim().toLowerCase();
       query =
-        "INSERT INTO user (username,email,password,role) VALUES (?,?,?,?)";
-      db.prepare(query).run(body.username, body.email, hashpass, body.role);
-      set.status = 201;
-      return { message: "Success create user" };
+        "INSERT INTO users (username,email,password,role) VALUES ($1,$2,$3,$4)";
+      const result = await db.query(query, [
+        body.username,
+        email,
+        hashpass,
+        body.role,
+      ]);
+      if (result.rowCount > 0) {
+        set.status = 201;
+        return { message: "Success create user" };
+      }
     } catch (error) {
       set.status = 500;
       return { message: (error as Error).message };
@@ -110,11 +134,10 @@ export const Admincontroller = {
       return { message: "Please Enter value" };
     }
     try {
-      dbres
-        .query(
-          "INSERT INTO menu_new (name,price,image_blob,image_mime,category,description) VALUES (?,?,?,?,?,?)"
-        )
-        .run(name, price, buffer, image.type, category, description);
+      db.query(
+        "INSERT INTO menu_new (name,price,image_blob,image_mime,category,description) VALUES ($1,$2,$3,$4,$5,$6)",
+        [name, price, buffer, image.type, category, description]
+      );
     } catch (err) {
       console.error("error", err);
     }
@@ -133,9 +156,9 @@ export const Admincontroller = {
       set.status = 400;
       return { message: "Please Enter username" };
     }
-    const query = "DELETE FROM user WHERE username=?";
-    const result = db.prepare(query).run(username);
-    if (!result.changes) {
+    const query = "DELETE FROM users WHERE username=$1";
+    const result = db.query(query, [username]);
+    if (result.rowCount === 0) {
       console.warn("ไม่พบผู้ใช้ที่จะลบ");
     } else {
       console.log("แก้ไขเรียบร้อย");

@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import bcryptjs from "bcryptjs";
-
-const db = new Database("user.sqlite");
+import { getDB } from "../lib/connect";
+const db = getDB();
 
 export const Authcontroller = {
   signin: async ({
@@ -23,21 +23,15 @@ export const Authcontroller = {
     }
 
     try {
-      const result = await db
-        .prepare("SELECT * FROM user WHERE username = ?")
-        .get(username);
+      const result = await db.query("SELECT * FROM users WHERE username = $1", [
+        username,
+      ]);
 
-      if (!result) {
+      if (result.rows.length === 0) {
         set.status = 404;
-        return { message: "Error: Username not found" }; // ❌ อย่า throw ใน logic ทั่วไป
+        return { message: "User not found" };
       }
-
-      const user = result as {
-        username: string;
-        email: string;
-        password: string;
-        role: "admin" | "user" | "kitchen";
-      };
+      const user = result.rows[0];
 
       const isMatch = await bcryptjs.compare(password, user.password);
       if (!isMatch) {
@@ -104,22 +98,23 @@ export const Authcontroller = {
     }
 
     try {
-      const existing = await db
-        .prepare("SELECT * FROM user WHERE username = ? OR email = ?")
-        .get(username, email);
+      const existing = await db.query(
+        "SELECT * FROM users WHERE username = $1 OR email = $2",
+        [username, email]
+      );
 
-      if (existing) {
-        set.status = 409;
+      // ถ้ามีข้อมูลแล้ว
+      if (existing.rows.length > 0) {
+        set.status = 409; // Conflict
         return { message: "Error: Username or Email already exists" };
       }
 
       const hashedPassword = await bcryptjs.hash(password, 10);
 
-      await db
-        .prepare(
-          "INSERT INTO user (username, email, password, role) VALUES (?, ?, ?, ?)"
-        )
-        .run(username, email, hashedPassword, role);
+      await db.query(
+        "INSERT INTO users (username, email, password, role) VALUES ($1, $2,$3,$4)",
+        [username, email, hashedPassword, role]
+      );
 
       set.status = 201;
       return { message: "Success: User registered successfully" };
