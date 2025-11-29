@@ -7,7 +7,7 @@ const db = getDB();
 // ================================
 // SECTION A — Types & Stores
 // ================================
-type Role = "user" | "kitchen";
+type Role = "user" | "kitchen" | "admin";
 
 type MsgPing = { type: "ping" };
 type MsgMessage = { type: "message"; to: string; content: string };
@@ -26,12 +26,17 @@ type IncomingMsg =
   | MsgPing
   | MsgMessage
   | MsgOrder
+  | Msgcallstaff
   | MsgOrderStatus
   | { type: string };
-
+type Msgcallstaff = {
+  type: "call_staff"
+  table_number: number | string
+}
 const sockets: Record<Role, Map<string, ServerWebSocket<any>>> = {
   user: new Map(),
   kitchen: new Map(),
+  admin: new Map(),
 };
 
 interface Client {
@@ -154,8 +159,8 @@ function safeParse(
       typeof msg === "string"
         ? msg
         : msg instanceof Uint8Array
-        ? td.decode(msg)
-        : String(msg);
+          ? td.decode(msg)
+          : String(msg);
     return { ok: true, data: JSON.parse(text) };
   } catch (err: any) {
     return { ok: false, err };
@@ -176,12 +181,15 @@ function preview(val: unknown, max = 300) {
       typeof val === "string"
         ? val
         : val instanceof Uint8Array
-        ? td.decode(val)
-        : JSON.stringify(val);
+          ? td.decode(val)
+          : JSON.stringify(val);
     return s.length > max ? s.slice(0, max) + "…" : s;
   } catch {
     return String(val);
   }
+}
+function ensureCallStaff(x: any): x is Msgcallstaff {
+  return x?.type === "call_staff" && (typeof x?.table_number === "string" || typeof x?.table_number === "number");
 }
 
 function ensureMessage(x: any): x is MsgMessage {
@@ -204,7 +212,7 @@ function ensureOrderStatus(x: any): x is MsgOrderStatus {
 export const web = (app: Elysia) => {
   return app.ws("/ws/:user", {
     query: t.Object({
-      role: t.Union([t.Literal("user"), t.Literal("kitchen")], {
+      role: t.Union([t.Literal("user"), t.Literal("kitchen"), t.Literal("admin")], {
         default: "user",
       }),
     }),
@@ -238,8 +246,7 @@ export const web = (app: Elysia) => {
 
       // Log raw payload (เห็นชัดว่า client ส่งอะไรจริง)
       console.log(
-        `[WS IN] user=${username} role=${
-          sender.role
+        `[WS IN] user=${username} role=${sender.role
         } typeof=${typeof msg} raw=${preview(msg)}`
       );
 
@@ -403,7 +410,31 @@ async function routeMessage(
       });
       return;
     }
-
+    case "call_staff": {
+      if (!ensureCallStaff(msg)) {
+        sendJSON(ws, {
+          type: "error",
+          message:
+            "call_staff ต้องมี to, order_id และ status (accepted|preparing|done|rejected)",
+        });
+        return;
+      }
+      const adminEntries = Array.from(sockets.admin.values());
+      if (adminEntries.length === 0) {
+        sendJSON(ws, { type: "error", message: "ไม่พบผู้ใช้หรือไม่ได้เชื่อมต่อ" });
+        return;
+      }
+      adminEntries.forEach((adminWs) => {
+        sendJSON(adminWs, {
+          type: "call_staff",
+          from: username,
+          table_number: msg.table_number,
+          timestamp: new Date().toISOString(),
+        });
+      });
+      sendJSON(ws, { type: "system", message: "เรียกพนักงานแล้ว รอสักครู่..." });
+      return;
+    }
     default: {
       console.warn("[WS INVALID TYPE]", msg);
       sendJSON(ws, {

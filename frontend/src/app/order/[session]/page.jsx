@@ -210,7 +210,33 @@ export default function OrderPage() {
       if (wsRef.current) wsRef.current.close();
     };
   }, [connectWebSocket]);
+  const callStaff = () => {
 
+    // 1. เช็คว่าต่อ WS ติดไหม
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      toast.error("ไม่สามารถเชื่อมต่อพนักงานได้ กรุณารีเฟรชหน้าจอ");
+      return false;
+    }
+
+    // 2. เช็คว่ามีเลขโต๊ะไหม
+    if (!table?.table_number) {
+      toast.error("ไม่พบข้อมูลโต๊ะ");
+      return false;
+    }
+
+    // 3. ส่งข้อมูล
+    try {
+      wsRef.current.send(JSON.stringify({
+        type: "call_staff",
+        table_number: table.table_number // ส่งเลขโต๊ะไปด้วย
+      }));
+      return true; // บอกลูกว่าส่งสำเร็จ
+    } catch (err) {
+      console.error("Send error:", err);
+      return false;
+    }
+
+  };
   // ================================
   // LOAD DATA
   // ================================
@@ -627,6 +653,7 @@ export default function OrderPage() {
         isOpen={modalOpen}
         onClose={() => setModalOpen(false)}
         orders={order}
+        onCallstaff={callStaff}
       />
 
       {/* Cart Modal */}

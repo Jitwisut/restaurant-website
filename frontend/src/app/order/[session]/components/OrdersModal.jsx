@@ -1,6 +1,6 @@
 "use client";
 import { motion, AnimatePresence } from "motion/react";
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { X, Clock, CheckCircle, XCircle, ChefHat } from "lucide-react";
 
@@ -20,12 +20,20 @@ const modalVariants = {
   exit: { opacity: 0, scale: 0.8, y: 50, transition: { duration: 0.3 } },
 };
 
-export default function OrdersModal({ isOpen, onClose, orders = [] }) {
-  const [localOrders, setLocalOrders] = useState(orders);
+
+export default function OrdersModal({ isOpen, onClose, orders = [], onCallstaff = () => { } }) {
+  const [localOrders, setLocalOrders] = useState(orders.filter((order) => order.status === "pending"));
+  const [status, setStatus] = useState("idle"); // idle | calling | success
+  const wsRef = useRef(null);
+
+  const handalCallStaff = () => {
+    setStatus("calling");
+    onCallstaff();
+  }
 
   // ถ้าไม่เปิด ไม่ต้อง render
   if (!isOpen) return null;
-                
+
   const modalContent = (
     <AnimatePresence>
       {isOpen && (
@@ -87,7 +95,7 @@ export default function OrdersModal({ isOpen, onClose, orders = [] }) {
                         <div className="flex items-start justify-between">
                           <div className="flex-1">
                             <h3 className="text-lg lg:text-xl font-semibold text-gray-800 mb-1">
-                              {order.menu_name || order.name}
+                              {order.menu_item_name}
                             </h3>
                             <div className="flex items-center gap-2 text-sm text-gray-600">
                               <span>จำนวน: {order.quantity}</span>
@@ -103,8 +111,15 @@ export default function OrdersModal({ isOpen, onClose, orders = [] }) {
                             ).toFixed(2)}
                           </div>
                         </div>
+
                       </motion.div>
                     ))}
+                    <button
+                      onClick={() => handalCallStaff()}
+                      className="flex items-center justify-center w-full py-2 mt-4 bg-orange-500 text-white rounded-xl hover:bg-orange-600 transition-colors"
+                    >
+                      เรียกพนักงาน
+                    </button>
                   </div>
                 ) : (
                   <motion.div

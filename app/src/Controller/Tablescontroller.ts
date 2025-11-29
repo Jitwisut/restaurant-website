@@ -159,4 +159,23 @@ export const Tablecontroller = {
     console.log("order", result.rows);
     return { order: result.rows };
   },
+  ordersuccess: async ({
+    set,
+    body,
+  }: {
+    set: Context["set"];
+    body: { table_number: Number };
+  }) => {
+    const tablenumber = body.table_number;
+    if (!tablenumber) {
+      set.status = 404;
+      return { message: "No table number" };
+    }
+    const result = await db.query(
+      "UPDATE orders SET status='completed' WHERE table_number=$1",
+      [tablenumber]
+    );
+    console.log("order", result.rows);
+    return { message: "success" };
+  },
 };

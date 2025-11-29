@@ -1,6 +1,6 @@
 "use client";
 import axios from "axios";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import MenuUpload from "./components/menupload";
@@ -8,6 +8,33 @@ import Swal from "sweetalert2";
 const api = process.env.NEXT_PUBLIC_BACKEND_URL;
 
 export default function RestaurantDashboard() {
+  useEffect(() => {
+    console.log("🔵 Attempting to connect WebSocket...");
+    wsRef.current = new WebSocket("ws://localhost:4000/ws/admin?role=admin");
+    wsRef.current.onopen = () => {
+      console.log("WebSocket connected");
+      setConnected(true);
+    };
+    wsRef.current.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.type === 'call_staff') {
+          Swal.fire({
+            title: `🔔 โต๊ะ ${data.table_number} เรียกพนักงาน!`,
+            text: `เวลา: ${new Date(data.timestamp).toLocaleTimeString()}`,
+            icon: 'warning',
+            confirmButtonText: 'รับทราบ',
+          });
+        }
+      } catch (error) {
+        console.log(error.message)
+      }
+    }
+
+  }, []);
+
+  const wsRef = useRef(null);
+  const [connected, setConnected] = useState(false);
   const [activeOrders] = useState(12);
   const [availableTables, setAvailable] = useState();
   const [reserved, setReserved] = useState();

@@ -37,7 +37,8 @@ export const Tablerouter = (app: Elysia) => {
             error: "Quantity must be between 1-11",
           }),
         }),
-      });
+      })
+      .post("/ordersuccess", Tablecontroller.ordersuccess);
     return app;
   });
 };
