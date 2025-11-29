@@ -4,6 +4,8 @@ import axios from "axios";
 import { useParams, useRouter } from "next/navigation";
 import Image from "next/image";
 import toast, { Toaster } from "react-hot-toast";
+import OrdersModal from "./components/OrdersModal";
+import CartModal from "./components/CartModal";
 import {
   ShoppingCart,
   Plus,
@@ -24,26 +26,9 @@ import {
   Loader2,
 } from "lucide-react";
 
-// ================================
-// CONFIGURATION & VALIDATION
-// ================================
-const getEnvVar = (key, fallback = null) => {
-  const value = process.env[key];
-  
-  // Debug: แสดงค่าที่โหลดได้
-  if (typeof window === 'undefined') {
-    console.log(`[ENV] ${key}:`, value || 'NOT SET');
-  }
-  
-  if (!value && !fallback) {
-    throw new Error(`Environment variable ${key} is required but not set`);
-  }
-  return value || fallback;
-};
-
 // ใส่ URL ของ backend ที่นี่ หรือใช้ .env.local
-const API_BASE = getEnvVar("NEXT_PUBLIC_BACKEND_URL", "http://localhost:4000");
-const WS_BASE = getEnvVar("NEXT_PUBLIC_API_WS", "ws://localhost:4000");
+const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL;
+const WS_BASE = process.env.NEXT_PUBLIC_API_WS;
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAY = 3000;
 const PING_INTERVAL = 30000;
@@ -53,6 +38,8 @@ const ORDER_SUBMIT_TIMEOUT = 500;
 // MAIN COMPONENT
 // ================================
 export default function OrderPage() {
+  const [modalOpen, setModalOpen] = useState(false);
+  const [cartModalOpen, setCartModalOpen] = useState(false);
   const { session: sessionHash } = useParams();
   const router = useRouter();
   const wsRef = useRef(null);
@@ -73,7 +60,8 @@ export default function OrderPage() {
   const [favorites, setFavorites] = useState(new Set());
   const [sortBy, setSortBy] = useState("default");
   const [showFilters, setShowFilters] = useState(false);
-
+  const [tablenumber, setTablenumber] = useState("");
+  const [order, setOrder] = useState();
   // ================================
   // WEBSOCKET
   // ================================
@@ -109,7 +97,10 @@ export default function OrderPage() {
         if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
           reconnectAttemptsRef.current++;
           setWsStatus("reconnecting");
-          reconnectTimeoutRef.current = setTimeout(connectWebSocket, RECONNECT_DELAY);
+          reconnectTimeoutRef.current = setTimeout(
+            connectWebSocket,
+            RECONNECT_DELAY
+          );
         } else {
           setWsStatus("error");
           toast.error("ไม่สามารถเชื่อมต่อได้ กรุณารีเฟรช");
@@ -125,7 +116,7 @@ export default function OrderPage() {
         try {
           const msg = JSON.parse(e.data);
           console.log("WS msg:", msg);
-          
+
           // ✅ รับ system message เมื่อส่ง order สำเร็จ
           if (msg.type === "system") {
             // เช็คว่าเป็นการตอบกลับ order หรือไม่
@@ -135,26 +126,26 @@ export default function OrderPage() {
                 clearTimeout(orderTimeoutRef.current);
                 orderTimeoutRef.current = undefined;
               }
-              
+
               // ล้างตะกร้า
               setCart([]);
               setSending(false);
-              
+
               // แสดง success เฉพาะเมื่อ backend ตอบกลับแล้ว
-              toast.success("✅ ส่งคำสั่งอาหารไปยังครัวแล้ว", { 
-                duration: 4000 
+              toast.success("✅ ส่งคำสั่งอาหารไปยังครัวแล้ว", {
+                duration: 4000,
               });
             } else if (msg.message.includes("เชื่อมต่อสำเร็จ")) {
               // แสดงข้อความเชื่อมต่อ
               console.log("Connected:", msg.message);
             } else {
               // system message อื่นๆ
-              toast(msg.message, { 
-                icon: "ℹ️", 
-                duration: 3000 
+              toast(msg.message, {
+                icon: "ℹ️",
+                duration: 3000,
               });
             }
-          } 
+          }
           // ❌ รับ error message
           else if (msg.type === "error") {
             // ล้าง timeout
@@ -162,18 +153,21 @@ export default function OrderPage() {
               clearTimeout(orderTimeoutRef.current);
               orderTimeoutRef.current = undefined;
             }
-            
+
             setSending(false);
-            
+
             // แสดง error ตามที่ backend ส่งมา
             if (msg.message.includes("ไม่พบครัว")) {
-              toast.error("ครัวยังไม่พร้อมรับออร์เดอร์\n• แจ้งพนักงาน\n• หรือลองใหม่อีกครั้ง", { 
-                duration: 6000
-              });
+              toast.error(
+                "ครัวยังไม่พร้อมรับออร์เดอร์\n• แจ้งพนักงาน\n• หรือลองใหม่อีกครั้ง",
+                {
+                  duration: 6000,
+                }
+              );
             } else {
               toast.error(msg.message, { duration: 4000 });
             }
-          } 
+          }
           // 🏓 Pong
           else if (msg.type === "pong") {
             console.log("pong received");
@@ -184,11 +178,16 @@ export default function OrderPage() {
               accepted: "ครัวรับออร์เดอร์แล้ว",
               preparing: "กำลังเตรียมอาหาร",
               done: "อาหารพร้อมเสิร์ฟ",
-              rejected: "ครัวปฏิเสธออร์เดอร์"
+              rejected: "ครัวปฏิเสธออร์เดอร์",
             };
             toast(statusText[msg.status] || "สถานะอัพเดท", {
-              icon: msg.status === "done" ? "🍽️" : msg.status === "rejected" ? "❌" : "👨‍🍳",
-              duration: 5000
+              icon:
+                msg.status === "done"
+                  ? "🍽️"
+                  : msg.status === "rejected"
+                    ? "❌"
+                    : "👨‍🍳",
+              duration: 5000,
             });
           }
         } catch (err) {
@@ -204,7 +203,8 @@ export default function OrderPage() {
   useEffect(() => {
     connectWebSocket();
     return () => {
-      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      if (reconnectTimeoutRef.current)
+        clearTimeout(reconnectTimeoutRef.current);
       if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
       if (orderTimeoutRef.current) clearTimeout(orderTimeoutRef.current);
       if (wsRef.current) wsRef.current.close();
@@ -225,31 +225,41 @@ export default function OrderPage() {
 
         if (tableRes.status === "fulfilled" && tableRes.value.status === 200) {
           const tableData = tableRes.value.data.table;
-          
+
           // รองรับทั้ง table_number และ number
           const tableNumber = tableData?.table_number || tableData?.number;
-          
+          setTablenumber(Number(tableNumber));
           // แปลงเป็น string เสมอ เพื่อให้แน่ใจว่าเป็นรูปแบบเดียวกัน
           const tableNumberStr = tableNumber ? String(tableNumber) : null;
-          
+
           // เซ็ต table พร้อมทำให้แน่ใจว่ามี table_number เป็น string
           setTable({
             ...tableData,
-            table_number: tableNumberStr
+            table_number: tableNumberStr,
           });
-          
+
           // Debug: แสดงข้อมูลโต๊ะที่โหลดได้
           console.log("[TABLE] Loaded:", tableData);
-          console.log("[TABLE] Table Number (original):", tableNumber, typeof tableNumber);
-          console.log("[TABLE] Table Number (converted):", tableNumberStr, typeof tableNumberStr);
-          
+          console.log(
+            "[TABLE] Table Number (original):",
+            tableNumber,
+            typeof tableNumber
+          );
+          console.log(
+            "[TABLE] Table Number (converted):",
+            tableNumberStr,
+            typeof tableNumberStr
+          );
+
           if (!tableNumberStr) {
-            console.error("[TABLE] ERROR: No table_number found in API response");
+            console.error(
+              "[TABLE] ERROR: No table_number found in API response"
+            );
             toast.error("ข้อมูลโต๊ะไม่ครบถ้วน กรุณาแจ้งพนักงาน");
           }
         } else {
           toast.error("QR Code ไม่ถูกต้องหรือหมดอายุ");
-          setTimeout(() => router.replace("/"), 2000);
+          setTimeout(() => router.replace("/table-closed"), 1000);
           return;
         }
 
@@ -274,7 +284,8 @@ export default function OrderPage() {
     const online = () => {
       setIsOnline(true);
       toast.success("กลับมาออนไลน์แล้ว", { icon: "🌐" });
-      if (wsStatus === "error" || wsStatus === "disconnected") connectWebSocket();
+      if (wsStatus === "error" || wsStatus === "disconnected")
+        connectWebSocket();
     };
     const offline = () => {
       setIsOnline(false);
@@ -298,7 +309,8 @@ export default function OrderPage() {
   }, [sessionHash]);
 
   useEffect(() => {
-    if (cart.length) localStorage.setItem(`cart_${sessionHash}`, JSON.stringify(cart));
+    if (cart.length)
+      localStorage.setItem(`cart_${sessionHash}`, JSON.stringify(cart));
     else localStorage.removeItem(`cart_${sessionHash}`);
   }, [cart, sessionHash]);
 
@@ -340,7 +352,10 @@ export default function OrderPage() {
     [cart]
   );
 
-  const totalItems = useMemo(() => cart.reduce((sum, i) => sum + i.qty, 0), [cart]);
+  const totalItems = useMemo(
+    () => cart.reduce((sum, i) => sum + i.qty, 0),
+    [cart]
+  );
 
   const addToCart = (item) => {
     // เช็คว่ามีข้อมูลโต๊ะหรือไม่
@@ -348,7 +363,7 @@ export default function OrderPage() {
       toast.error("ไม่พบข้อมูลโต๊ะ กรุณารีเฟรชหน้าใหม่");
       return;
     }
-    
+
     setCart((prev) => {
       const idx = prev.findIndex((x) => x.item.id === item.id);
       if (idx !== -1)
@@ -373,8 +388,8 @@ export default function OrderPage() {
         i.item.id === id && i.qty + delta <= 0
           ? []
           : i.item.id === id
-          ? [{ ...i, qty: i.qty + delta }]
-          : [i]
+            ? [{ ...i, qty: i.qty + delta }]
+            : [i]
       )
     );
   };
@@ -408,17 +423,17 @@ export default function OrderPage() {
     if (!isOnline) return toast.error("ไม่มีอินเทอร์เน็ต");
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN)
       return toast.error("ยังเชื่อมต่อไม่สำเร็จ กรุณารอสักครู่");
-    
+
     // เช็คว่ามีเลขโต๊ะหรือไม่
     if (!table?.table_number) {
       return toast.error("ไม่พบข้อมูลโต๊ะ กรุณารีเฟรชหน้าใหม่");
     }
 
     setSending(true);
-    
+
     // แปลง table_number เป็น string หรือ number (แล้วแต่ backend ต้องการ)
     const tableNumber = String(table.table_number);
-    
+
     // สร้าง order payload ตาม backend format
     const orderPayload = {
       type: "order",
@@ -435,27 +450,44 @@ export default function OrderPage() {
 
     console.log("[ORDER] Sending:", orderPayload);
     console.log("[ORDER] Table Number:", tableNumber, typeof tableNumber);
-    
+
     try {
       // ส่ง order ไปยัง WebSocket
       wsRef.current.send(JSON.stringify(orderPayload));
-      
+
       // ตั้ง timeout เผื่อ backend ไม่ตอบกลับ (5 วินาที)
       orderTimeoutRef.current = setTimeout(() => {
         setSending(false);
-        
+
         toast.error("ไม่ได้รับการตอบกลับจากระบบ\nกรุณาแจ้งพนักงาน", {
-          duration: 5000
+          duration: 5000,
         });
       }, 5000);
-      
     } catch (error) {
       console.error("[ORDER] Send error:", error);
       setSending(false);
       toast.error("เกิดข้อผิดพลาดในการส่งคำสั่ง");
     }
   };
-
+  const fetchorder = async () => {
+    setLoading(true);
+    const number = tablenumber;
+    try {
+      const data = await axios.post(`${API_BASE}/tables/orderhistory`, {
+        table_number: number,
+      });
+      setOrder(data.data.order);
+      console.log(data);
+    } catch (err) {
+      console.error(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+  const handleOpenModal = async () => {
+    await fetchorder(); // fetch ข้อมูลก่อน
+    setModalOpen(true); // แล้วค่อยเปิด Modal
+  };
   // ================================
   // RENDER
   // ================================
@@ -482,7 +514,9 @@ export default function OrderPage() {
         ) : wsStatus === "reconnecting" ? (
           <>
             <Loader2 className="h-4 w-4 text-yellow-600 animate-spin" />
-            <span className="font-medium text-yellow-600">กำลังเชื่อมต่อ...</span>
+            <span className="font-medium text-yellow-600">
+              กำลังเชื่อมต่อ...
+            </span>
           </>
         ) : wsStatus === "error" ? (
           <>
@@ -498,9 +532,11 @@ export default function OrderPage() {
       </div>
 
       {/* Header */}
+      {/* Header */}
       <header className="bg-white/80 backdrop-blur-xl shadow-xl sticky top-0 z-40 border-b border-purple-100">
         <div className="max-w-7xl mx-auto px-4 py-4 lg:py-6">
           <div className="flex items-center justify-between mb-3 lg:mb-4">
+            {/* ฝั่งซ้าย - Restaurant Info */}
             <div className="flex items-center space-x-2 lg:space-x-4">
               <div className="bg-gradient-to-r from-purple-500 to-pink-500 p-2 lg:p-3 rounded-xl shadow-lg">
                 <ChefHat className="h-5 w-5 lg:h-6 lg:w-6 text-white" />
@@ -515,19 +551,38 @@ export default function OrderPage() {
                 </div>
               </div>
             </div>
-            <div className="relative">
-              <div className="bg-gradient-to-r from-purple-500 to-pink-500 p-2 lg:p-3 rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105 cursor-pointer group">
-                <ShoppingCart className="h-5 w-5 lg:h-6 lg:w-6 text-white" />
-                {totalItems > 0 && (
-                  <div className="absolute -top-1 -right-1 bg-gradient-to-r from-orange-400 to-red-400 text-white text-xs rounded-full h-5 w-5 lg:h-6 lg:w-6 flex items-center justify-center font-bold shadow-lg animate-pulse">
-                    {totalItems}
-                  </div>
-                )}
+
+            {/* ฝั่งขวา - Actions */}
+            <div className="flex items-center gap-2 lg:gap-3">
+              {/* ปุ่มรายการอาหาร */}
+              <button
+                onClick={() => handleOpenModal()}
+                className="inline-flex items-center gap-2 bg-gradient-to-r from-orange-400 via-pink-500 to-pink-600 hover:from-orange-500 hover:via-pink-600 hover:to-pink-700 px-3 py-2 rounded-full shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105 active:scale-95 flex-shrink-0"
+              >
+                <ChefHat className="h-4 w-4 text-white flex-shrink-0" />
+                <span className="text-white font-bold text-xs whitespace-nowrap">
+                  รายการอาหาร
+                </span>
+              </button>
+
+              {/* Shopping Cart */}
+              <div className="relative flex-shrink-0">
+                <div
+                  onClick={() => setCartModalOpen(true)}
+                  className="bg-gradient-to-r from-purple-500 to-pink-500 p-2 lg:p-3 rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105 cursor-pointer group"
+                >
+                  <ShoppingCart className="h-5 w-5 lg:h-6 lg:w-6 text-white" />
+                  {totalItems > 0 && (
+                    <div className="absolute -top-1 -right-1 bg-gradient-to-r from-orange-400 to-red-400 text-white text-xs rounded-full h-5 w-5 lg:h-6 lg:w-6 flex items-center justify-center font-bold shadow-lg animate-pulse">
+                      {totalItems}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>
 
-          {/* Search and Filter */}
+          {/* Search and Filter - ลบปุ่มรายการอาหารออกจากส่วนนี้ */}
           <div className="flex flex-col gap-2 lg:flex-row lg:gap-4">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 lg:h-5 lg:w-5 text-gray-400" />
@@ -554,11 +609,10 @@ export default function OrderPage() {
               </select>
               <button
                 onClick={() => setShowFilters(!showFilters)}
-                className={`p-2 lg:p-3 rounded-2xl border transition-all ${
-                  showFilters
-                    ? "bg-purple-500 text-white border-purple-500"
-                    : "bg-white/70 text-gray-700 border-gray-200 hover:border-purple-400"
-                }`}
+                className={`p-2 lg:p-3 rounded-2xl border transition-all ${showFilters
+                  ? "bg-purple-500 text-white border-purple-500"
+                  : "bg-white/70 text-gray-700 border-gray-200 hover:border-purple-400"
+                  }`}
                 aria-label="แสดง/ซ่อนตัวกรอง"
               >
                 <Filter className="h-4 w-4 lg:h-5 lg:w-5" />
@@ -567,6 +621,27 @@ export default function OrderPage() {
           </div>
         </div>
       </header>
+
+      {/* Modal - วางนอก Header */}
+      <OrdersModal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        orders={order}
+      />
+
+      {/* Cart Modal */}
+      <CartModal
+        isOpen={cartModalOpen}
+        onClose={() => setCartModalOpen(false)}
+        cart={cart}
+        totalPrice={totalPrice}
+        totalItems={totalItems}
+        changeQty={changeQty}
+        submitOrder={submitOrder}
+        sending={sending}
+        isOnline={isOnline}
+        wsStatus={wsStatus}
+      />
 
       <div className="max-w-7xl mx-auto px-4 py-4 lg:py-8 grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-8">
         {/* Menu Section */}
@@ -587,11 +662,10 @@ export default function OrderPage() {
                   <button
                     key={cat}
                     onClick={() => setSelectedCategory(cat)}
-                    className={`px-3 py-1 lg:px-4 lg:py-2 rounded-xl lg:rounded-2xl font-medium transition-all duration-300 shadow-md hover:shadow-lg text-sm lg:text-base ${
-                      selectedCategory === cat
-                        ? "bg-gradient-to-r from-purple-500 to-pink-500 text-white"
-                        : "bg-white/80 text-gray-700 hover:bg-purple-50 border border-gray-200 backdrop-blur-sm"
-                    }`}
+                    className={`px-3 py-1 lg:px-4 lg:py-2 rounded-xl lg:rounded-2xl font-medium transition-all duration-300 shadow-md hover:shadow-lg text-sm lg:text-base ${selectedCategory === cat
+                      ? "bg-gradient-to-r from-purple-500 to-pink-500 text-white"
+                      : "bg-white/80 text-gray-700 hover:bg-purple-50 border border-gray-200 backdrop-blur-sm"
+                      }`}
                   >
                     {cat}
                   </button>
@@ -646,19 +720,19 @@ export default function OrderPage() {
                         <div className="flex space-x-1 lg:space-x-2">
                           <button
                             onClick={() => toggleFavorite(item.id)}
-                            className={`p-1 lg:p-2 rounded-full backdrop-blur-sm transition-all duration-300 ${
-                              isFavorite
-                                ? "bg-red-500 text-white shadow-md"
-                                : "bg-white/80 text-gray-600 hover:bg-red-50"
-                            }`}
+                            className={`p-1 lg:p-2 rounded-full backdrop-blur-sm transition-all duration-300 ${isFavorite
+                              ? "bg-red-500 text-white shadow-md"
+                              : "bg-white/80 text-gray-600 hover:bg-red-50"
+                              }`}
                             aria-label={
-                              isFavorite ? "ลบออกจากรายการโปรด" : "เพิ่มในรายการโปรด"
+                              isFavorite
+                                ? "ลบออกจากรายการโปรด"
+                                : "เพิ่มในรายการโปรด"
                             }
                           >
                             <Heart
-                              className={`h-3 w-3 lg:h-4 lg:w-4 ${
-                                isFavorite ? "fill-current" : ""
-                              }`}
+                              className={`h-3 w-3 lg:h-4 lg:w-4 ${isFavorite ? "fill-current" : ""
+                                }`}
                             />
                           </button>
                           <button

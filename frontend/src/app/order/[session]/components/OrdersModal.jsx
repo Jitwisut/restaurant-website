@@ -1,0 +1,152 @@
+"use client";
+import { motion, AnimatePresence } from "motion/react";
+import { useState } from "react";
+import { createPortal } from "react-dom";
+import { X, Clock, CheckCircle, XCircle, ChefHat } from "lucide-react";
+
+const backdropVariants = {
+  hidden: { opacity: 0 },
+  visible: { opacity: 1 },
+};
+
+const modalVariants = {
+  hidden: { opacity: 0, scale: 0.8, y: -50 },
+  visible: {
+    opacity: 1,
+    scale: 1,
+    y: 0,
+    transition: { type: "spring", damping: 25, stiffness: 300 },
+  },
+  exit: { opacity: 0, scale: 0.8, y: 50, transition: { duration: 0.3 } },
+};
+
+export default function OrdersModal({ isOpen, onClose, orders = [] }) {
+  const [localOrders, setLocalOrders] = useState(orders);
+
+  // ถ้าไม่เปิด ไม่ต้อง render
+  if (!isOpen) return null;
+                
+  const modalContent = (
+    <AnimatePresence>
+      {isOpen && (
+        <>
+          {/* Backdrop */}
+          <motion.div
+            variants={backdropVariants}
+            initial="hidden"
+            animate="visible"
+            exit="hidden"
+            onClick={onClose}
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4"
+            style={{ margin: 0 }}
+          >
+            {/* Modal Content */}
+            <motion.div
+              variants={modalVariants}
+              initial="hidden"
+              animate="visible"
+              exit="exit"
+              onClick={(e) => e.stopPropagation()}
+              className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col"
+            >
+              {/* Header */}
+              <div className="bg-gradient-to-r from-orange-500 to-pink-500 p-6 text-white">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h2 className="text-2xl lg:text-3xl font-bold mb-1 flex items-center gap-2">
+                      <ChefHat className="w-7 h-7 lg:w-8 lg:h-8" />
+                      รายการอาหารที่สั่ง
+                    </h2>
+                    <p className="text-white/90">
+                      ทั้งหมด {localOrders.length} รายการ
+                    </p>
+                  </div>
+                  <motion.button
+                    whileHover={{ scale: 1.1, rotate: 90 }}
+                    whileTap={{ scale: 0.9 }}
+                    onClick={onClose}
+                    className="text-white bg-white/20 hover:bg-white/30 p-2 rounded-full transition-colors"
+                  >
+                    <X className="w-6 h-6" />
+                  </motion.button>
+                </div>
+              </div>
+
+              {/* Orders List */}
+              <div className="flex-1 overflow-y-auto p-4 lg:p-6">
+                {localOrders.length > 0 ? (
+                  <div className="space-y-3">
+                    {localOrders.map((order, index) => (
+                      <motion.div
+                        key={order.id || index}
+                        initial={{ opacity: 0, x: -30 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: index * 0.05 }}
+                        className="bg-gradient-to-r from-orange-50 to-pink-50 rounded-xl shadow-md p-4 border border-orange-100"
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <h3 className="text-lg lg:text-xl font-semibold text-gray-800 mb-1">
+                              {order.menu_name || order.name}
+                            </h3>
+                            <div className="flex items-center gap-2 text-sm text-gray-600">
+                              <span>จำนวน: {order.quantity}</span>
+                              <span className="text-orange-600 font-semibold">
+                                ฿{order.price}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="text-xl font-bold text-orange-600">
+                            ฿
+                            {(
+                              (order.price || 0) * (order.quantity || 0)
+                            ).toFixed(2)}
+                          </div>
+                        </div>
+                      </motion.div>
+                    ))}
+                  </div>
+                ) : (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="flex flex-col items-center justify-center py-16"
+                  >
+                    <div className="text-9xl mb-6">🍽️</div>
+                    <p className="text-2xl text-gray-400 font-medium mb-2">
+                      ยังไม่มีรายการอาหาร
+                    </p>
+                    <p className="text-gray-400">เริ่มต้นสั่งอาหารของคุณเลย!</p>
+                  </motion.div>
+                )}
+              </div>
+
+              {/* Footer */}
+              {localOrders.length > 0 && (
+                <div className="bg-gradient-to-r from-orange-500 to-pink-500 p-6 text-white">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xl font-semibold">ยอดรวมทั้งหมด</span>
+                    <span className="text-3xl font-bold">
+                      ฿
+                      {localOrders
+                        .reduce(
+                          (sum, order) => sum + order.price * order.quantity,
+                          0
+                        )
+                        .toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </motion.div>
+          </motion.div>
+        </>
+      )}
+    </AnimatePresence>
+  );
+
+  // ใช้ Portal วาง Modal นอก DOM tree
+  return typeof window !== "undefined"
+    ? createPortal(modalContent, document.body)
+    : null;
+}

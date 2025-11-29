@@ -1,11 +1,14 @@
-
 import { customAlphabet } from "nanoid";
 import { Context } from "elysia";
 import QRCode from "qrcode";
 import { getDB } from "../lib/connect";
 const baseurl = Bun.env.ORIGIN_URL;
 const db = getDB();
-const nanoid = customAlphabet("1234567890abcdef", 8);
+
+const nanoid = customAlphabet(
+  "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+  21
+);
 export const Tablecontroller = {
   gettable: async ({ set }: Context) => {
     const query = "SELECT * FROM tables";
@@ -15,6 +18,7 @@ export const Tablecontroller = {
     return { tables: result.rows };
   },
   opentable: async ({ set, body }: any) => {
+    await db.query("BEGIN");
     const rawNumber = body.number;
     const tableNumber = parseInt(rawNumber ?? "", 10);
     const paddedNumber = tableNumber.toString().padStart(2, "0"); // 2 → "02"
@@ -24,7 +28,7 @@ export const Tablecontroller = {
       return { message: "หมายเลขโต๊ะไม่ถูกต้อง" };
     }
 
-    const hash = nanoid(10); // session hash
+    const hash = nanoid(30); // session hash
     const qrPath = `/order/${hash}`;
     const fullURL = `${baseurl}${qrPath}`;
 
@@ -49,7 +53,7 @@ export const Tablecontroller = {
         set.status = 409; // Conflict
         return { message: "โต๊ะนี้ถูกเปิดแล้วหรือไม่พบ" };
       }
-
+      await db.query("COMMIT");
       return {
         message: "เปิดโต๊ะสำเร็จ",
         table_number: tableNumber,
@@ -58,6 +62,7 @@ export const Tablecontroller = {
         fullurl: fullURL,
       };
     } catch (err) {
+      await db.query("ROLLBACK");
       console.error("❌ opentable error:", err);
       set.status = 500;
       return { message: "เกิดข้อผิดพลาดภายในเซิร์ฟเวอร์" };
@@ -79,7 +84,7 @@ export const Tablecontroller = {
     }
 
     try {
-      const stmt = db.query(
+      const stmt = await db.query(
         `
       UPDATE tables
          SET status           = 'available',
@@ -103,7 +108,6 @@ export const Tablecontroller = {
       set.status = 500;
       return {
         message: "เกิดข้อผิดพลาดภายในเซิร์ฟเวอร์",
-        Error: (err as Error).message,
       };
     }
   },
@@ -116,7 +120,6 @@ export const Tablecontroller = {
     params: Context["params"];
   }) => {
     const hashcode = params.session;
-    console.log(hashcode);
     if (!hashcode) {
       set.status = 400;
       return { message: "ไม่พบ hashcode" };
@@ -126,7 +129,6 @@ export const Tablecontroller = {
     const query = "SELECT * FROM tables WHERE customer_session = $1";
     const result = await db.query(query, [hashcode]);
 
-    console.log("result", result);
     if (result.rowCount === 0) {
       set.status = 404;
       return { message: "ไม่พบโต๊ะ" };
@@ -135,5 +137,26 @@ export const Tablecontroller = {
     const table = result.rows[0];
     set.status = 200;
     return { message: "พบโต๊ะ", table: table };
+  },
+  orderhistory: async ({
+    set,
+
+    body,
+  }: {
+    set: Context["set"];
+    params: Context["params"];
+    body: { table_number: Number };
+  }) => {
+    const tablenumber = body.table_number;
+    if (!tablenumber) {
+      set.status = 404;
+      return { message: "No table number" };
+    }
+    const result = await db.query(
+      "SELECT * FROM orders JOIN order_items ON orders.id=order_items.order_id WHERE table_number=$1",
+      [tablenumber]
+    );
+    console.log("order", result.rows);
+    return { order: result.rows };
   },
 };

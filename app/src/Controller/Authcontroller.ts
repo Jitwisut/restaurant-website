@@ -32,8 +32,13 @@ export const Authcontroller = {
         return { message: "User not found" };
       }
       const user = result.rows[0];
-
-      const isMatch = await bcryptjs.compare(password, user.password);
+      if (!user.password) {
+        return { message: "Invalid credentials" };
+      }
+      const isMatch = await bcryptjs.compare(
+        String(password),
+        String(user.password)
+      );
       if (!isMatch) {
         set.status = 400;
         return { message: "Error: Invalid password" };

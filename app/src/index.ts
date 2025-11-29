@@ -2,6 +2,7 @@ import { Elysia } from "elysia";
 import cors from "@elysiajs/cors";
 import jwt from "@elysiajs/jwt";
 import { elysiaHelmet } from "elysiajs-helmet";
+import { rateLimit } from "elysia-rate-limit";
 /* routers ของคุณ */
 import { Auths } from "./router/Auth";
 import { Adminrouter } from "./router/Adminrouter";
@@ -18,9 +19,16 @@ const app = new Elysia();
 
 /* ① CORS ต้องมาก่อนทุกอย่าง  */
 app
+
   .use(
     cors({
-      origin: url2,
+      origin: (request) => {
+        const origin = request.headers.get('origin');
+        // อนุญาต localhost สำหรับ development
+        if (origin?.includes('localhost')) return true;
+        // อนุญาต origin จาก env
+        return origin === url || origin === url2;
+      },
       credentials: true,
       methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization", "X-XSRF-TOKEN"],
@@ -35,7 +43,7 @@ app
     set.headers["Content-Security-Policy"] =
       "default-src 'self'; connect-src 'self' https://backend-restaurant-deploy.onrender.com https://frontend-restaurant-97nb.vercel.app";
   })
-  
+
   .use(elysiaHelmet({}))
 
   .use(

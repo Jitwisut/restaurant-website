@@ -315,6 +315,7 @@ export default function KitchenDashboard() {
           // อัพเดทสถานะใน state
           setQueue((prevQueue) => {
             if (status === "done") {
+              
               return prevQueue.filter((order) => order.orderId !== orderId);
             } else {
               return prevQueue.map((order) =>

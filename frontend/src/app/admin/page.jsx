@@ -66,9 +66,8 @@ const FormInput = ({
       <input
         {...props}
         disabled={loading || props.disabled}
-        className={`w-full border p-3 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 bg-slate-50 hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed ${
-          error ? "border-red-300 bg-red-50" : "border-slate-200"
-        } ${props.className || ""}`}
+        className={`w-full border p-3 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 bg-slate-50 hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed ${error ? "border-red-300 bg-red-50" : "border-slate-200"
+          } ${props.className || ""}`}
         aria-invalid={error ? "true" : "false"}
         aria-describedby={error ? `${props.id}-error` : undefined}
       />
@@ -203,9 +202,8 @@ const StatCard = ({
       </div>
       <div className="space-y-1">
         <div
-          className={`text-2xl lg:text-3xl font-bold ${
-            colorClasses[color].split(" ")[4]
-          }`}
+          className={`text-2xl lg:text-3xl font-bold ${colorClasses[color].split(" ")[4]
+            }`}
         >
           {loading ? <LoadingSpinner size="sm" /> : value ?? 0}
         </div>
@@ -270,7 +268,7 @@ const AdminUserManagement = () => {
     isOpen: false,
     title: "",
     message: "",
-    onConfirm: () => {},
+    onConfirm: () => { },
     type: "danger",
   });
 
@@ -509,9 +507,9 @@ const AdminUserManagement = () => {
       users.map((user) =>
         user.id === userId
           ? {
-              ...user,
-              status: user.status === "active" ? "inactive" : "active",
-            }
+            ...user,
+            status: user.status === "active" ? "inactive" : "active",
+          }
           : user
       )
     );
@@ -668,9 +666,8 @@ const AdminUserManagement = () => {
                 aria-label="รีเฟรชข้อมูล"
               >
                 <RefreshCw
-                  className={`w-5 h-5 text-slate-600 ${
-                    loading ? "animate-spin" : ""
-                  }`}
+                  className={`w-5 h-5 text-slate-600 ${loading ? "animate-spin" : ""
+                    }`}
                 />
               </button>
               <button className="p-2 rounded-xl bg-white shadow-md hover:shadow-lg transition-all duration-200 hover:scale-105">
@@ -1209,18 +1206,16 @@ const AdminUserManagement = () => {
                       </td>
                       <td className="px-4 lg:px-6 py-4">
                         <span
-                          className={`inline-flex items-center px-2 lg:px-3 py-1 rounded-full text-xs font-semibold ${
-                            user.status === "active"
-                              ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
-                              : "bg-slate-100 text-slate-800 border border-slate-200"
-                          }`}
+                          className={`inline-flex items-center px-2 lg:px-3 py-1 rounded-full text-xs font-semibold ${user.status === "active"
+                            ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                            : "bg-slate-100 text-slate-800 border border-slate-200"
+                            }`}
                         >
                           <div
-                            className={`w-2 h-2 rounded-full mr-2 ${
-                              user.status === "active"
-                                ? "bg-emerald-500"
-                                : "bg-slate-400"
-                            }`}
+                            className={`w-2 h-2 rounded-full mr-2 ${user.status === "active"
+                              ? "bg-emerald-500"
+                              : "bg-slate-400"
+                              }`}
                           ></div>
                           {user.status === "active"
                             ? "ใช้งานอยู่"
@@ -1276,8 +1271,8 @@ const AdminUserManagement = () => {
                           </div>
                           <div className="text-sm text-slate-400 max-w-md text-center">
                             {debouncedSearchTerm ||
-                            filterRole !== "all" ||
-                            filterStatus !== "all"
+                              filterRole !== "all" ||
+                              filterStatus !== "all"
                               ? "ลองเปลี่ยนเงื่อนไขการค้นหาหรือกรองข้อมูล"
                               : "ยังไม่มีผู้ใช้ในระบบ เริ่มต้นด้วยการเพิ่มผู้ใช้ใหม่"}
                           </div>

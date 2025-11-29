@@ -1,7 +1,9 @@
 // src/router/websocket.ts
 import { Elysia, t } from "elysia";
 import type { ServerWebSocket } from "bun";
+import { getDB } from "../lib/connect";
 
+const db = getDB();
 // ================================
 // SECTION A — Types & Stores
 // ================================
@@ -9,14 +11,23 @@ type Role = "user" | "kitchen";
 
 type MsgPing = { type: "ping" };
 type MsgMessage = { type: "message"; to: string; content: string };
-type MsgOrder = { type: "order"; menu: unknown; table_number?: number | string };
+type MsgOrder = {
+  type: "order";
+  menu: unknown;
+  table_number?: number | string;
+};
 type MsgOrderStatus = {
   type: "order_status";
   to: string;
   order_id: string;
   status: "accepted" | "preparing" | "done" | "rejected";
 };
-type IncomingMsg = MsgPing | MsgMessage | MsgOrder | MsgOrderStatus | { type: string };
+type IncomingMsg =
+  | MsgPing
+  | MsgMessage
+  | MsgOrder
+  | MsgOrderStatus
+  | { type: string };
 
 const sockets: Record<Role, Map<string, ServerWebSocket<any>>> = {
   user: new Map(),
@@ -34,12 +45,109 @@ const clients = new Map<string, Client>();
 // ================================
 const td = new TextDecoder();
 
+async function validateTable(tablesNumber: number): Promise<boolean> {
+  const result = await db.query(
+    "SELECT tables_number,status FROM tables WHERE tables_number=$1"
+  );
+  if (result.rows.length === 0) {
+    return false; //ไม่มีโต๊ะนี้
+  }
+  const tableStatus = result.rows[0].status;
+  if (tableStatus !== "avaliable") {
+    return false; //โต๊ะไม่พร้อมใช้งาน
+  }
+  return true;
+}
+async function updateTableStatus(tableNumber: number, status: string) {
+  await db.query(
+    "UPDATE tables SET status =$1, opened_at=NOW() WHERE tables_number=$2",
+    [status, tableNumber]
+  );
+}
+
+async function generateOrderId(): Promise<string> {
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const datePrefix = `${year}${month}${day}`;
+
+  try {
+    // หา order ล่าสุดของวันนี้จาก database
+    const result = await db.query(
+      `SELECT id FROM orders 
+       WHERE id LIKE $1 
+       ORDER BY id DESC 
+       LIMIT 1`,
+      [`ORD-${datePrefix}-%`]
+    );
+
+    let sequence = 1;
+
+    // ถ้ามี order วันนี้แล้ว เอา sequence ล่าสุด + 1
+    if (result.rows.length > 0) {
+      const lastId = result.rows[0].id; // เช่น "ORD-20251109-005"
+      const parts = lastId.split("-"); // ["ORD", "20251109", "005"]
+      const lastSequence = parseInt(parts[2]); // 5
+      sequence = lastSequence + 1; // 6
+    }
+
+    const sequenceStr = String(sequence).padStart(3, "0");
+    const orderId = `ORD-${datePrefix}-${sequenceStr}`;
+
+    console.log(`✅ Generated order ID: ${orderId}`);
+    return orderId;
+  } catch (err) {
+    console.error("❌ Error generating order ID:", err);
+    // Fallback: ใช้ timestamp + random ถ้า database error
+    const timestamp = Date.now();
+    const random = Math.floor(Math.random() * 1000);
+    return `ORD-${timestamp}-${random}`;
+  }
+}
+
+async function Savetodb(order: {
+  id: string;
+  menu: any;
+  table_number: number;
+  customer_session?: string;
+}) {
+  try {
+    await db.query("BEGIN");
+
+    await db.query(
+      "INSERT INTO orders (id,table_number,customer_session,status,updated_at) VALUES ($1,$2,$3,'pending',NOW())",
+      [order.id, order.table_number, order.customer_session]
+    );
+    const items = order.menu.items;
+    console.log("items", items);
+    if (Array.isArray(order.menu.items)) {
+      for (const item of items) {
+        await db.query(
+          `INSERT INTO order_items (order_id, menu_item_name, quantity, price, notes)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [order.id, item.name, item.qty, item.price, item.notes || null]
+        );
+      }
+    }
+
+    await db.query("COMMIT");
+  } catch (err) {
+    await db.query("ROLLBACK");
+    console.error("Error FROM Savetodb function", (err as Error).message);
+  }
+}
+
 function safeParse(
   msg: unknown
 ): { ok: true; data: any } | { ok: false; err: Error } {
   try {
-    // ✅ ถ้าเป็น object (และไม่ใช่ Uint8Array) ให้รับตรง ๆ ไม่ต้อง parse
-    if (msg !== null && typeof msg === "object" && !(msg instanceof Uint8Array)) {
+    //  ถ้าเป็น object (และไม่ใช่ Uint8Array) ให้รับตรง ๆ ไม่ต้อง parse
+    if (
+      msg !== null &&
+      typeof msg === "object" &&
+      !(msg instanceof Uint8Array)
+    ) {
       return { ok: true, data: msg };
     }
     const text =
@@ -96,7 +204,9 @@ function ensureOrderStatus(x: any): x is MsgOrderStatus {
 export const web = (app: Elysia) => {
   return app.ws("/ws/:user", {
     query: t.Object({
-      role: t.Union([t.Literal("user"), t.Literal("kitchen")], { default: "user" }),
+      role: t.Union([t.Literal("user"), t.Literal("kitchen")], {
+        default: "user",
+      }),
     }),
 
     open(ws) {
@@ -119,19 +229,27 @@ export const web = (app: Elysia) => {
       const sender = clients.get(username);
 
       if (!sender) {
-        sendJSON(ws as any, { type: "error", message: "ไม่พบผู้ใช้หรือไม่ได้เชื่อมต่อ" });
+        sendJSON(ws as any, {
+          type: "error",
+          message: "ไม่พบผู้ใช้หรือไม่ได้เชื่อมต่อ",
+        });
         return;
       }
 
       // Log raw payload (เห็นชัดว่า client ส่งอะไรจริง)
       console.log(
-        `[WS IN] user=${username} role=${sender.role} typeof=${typeof msg} raw=${preview(msg)}`
+        `[WS IN] user=${username} role=${
+          sender.role
+        } typeof=${typeof msg} raw=${preview(msg)}`
       );
 
       const parsed = safeParse(msg);
       if (!parsed.ok) {
         console.error("[WS PARSE ERROR]", parsed.err);
-        sendJSON(ws as any, { type: "error", message: "ข้อความต้องเป็น JSON ที่ถูกต้อง" });
+        sendJSON(ws as any, {
+          type: "error",
+          message: "ข้อความต้องเป็น JSON ที่ถูกต้อง",
+        });
         return;
       }
 
@@ -154,7 +272,9 @@ export const web = (app: Elysia) => {
         sockets[client.role].delete(username);
         clients.delete(username);
       }
-      console.log(`[WS CLOSE] ${username} (${client?.role ?? "?"}) disconnected`);
+      console.log(
+        `[WS CLOSE] ${username} (${client?.role ?? "?"}) disconnected`
+      );
     },
   });
 };
@@ -162,7 +282,7 @@ export const web = (app: Elysia) => {
 // ================================
 // MESSAGE ROUTER
 // ================================
-function routeMessage(
+async function routeMessage(
   ctx: { ws: ServerWebSocket; username: string; sender: Client },
   msg: IncomingMsg
 ) {
@@ -176,12 +296,18 @@ function routeMessage(
 
     case "message": {
       if (!ensureMessage(msg)) {
-        sendJSON(ws, { type: "error", message: "message ต้องมี to และ content เป็นสตริง" });
+        sendJSON(ws, {
+          type: "error",
+          message: "message ต้องมี to และ content เป็นสตริง",
+        });
         return;
       }
       const recipient = clients.get(msg.to);
       if (!recipient) {
-        sendJSON(ws, { type: "error", message: `ไม่พบผู้ใช้ ${msg.to} หรือไม่ได้เชื่อมต่อ` });
+        sendJSON(ws, {
+          type: "error",
+          message: `ไม่พบผู้ใช้ ${msg.to} หรือไม่ได้เชื่อมต่อ`,
+        });
         return;
       }
 
@@ -203,7 +329,10 @@ function routeMessage(
 
     case "order": {
       if (sender.role !== "user") {
-        sendJSON(ws, { type: "error", message: "เฉพาะ role=user เท่านั้นที่ส่ง order ได้" });
+        sendJSON(ws, {
+          type: "error",
+          message: "เฉพาะ role=user เท่านั้นที่ส่ง order ได้",
+        });
         return;
       }
       if (!ensureOrder(msg)) {
@@ -227,6 +356,16 @@ function routeMessage(
         });
       });
 
+      const orderId = await generateOrderId();
+      try {
+        Savetodb({
+          id: orderId,
+          menu: msg.menu,
+          table_number: parseInt(String(msg.table_number)),
+        });
+      } catch (err) {
+        console.error("Error savedb", (err as Error).message);
+      }
       sendJSON(ws, {
         type: "system",
         message: "ส่งคำสั่งอาหารไปยังครัวแล้ว",
@@ -246,9 +385,13 @@ function routeMessage(
         });
         return;
       }
+
       const recipient = clients.get(msg.to);
       if (!recipient) {
-        sendJSON(ws, { type: "error", message: `ไม่พบผู้ใช้ ${msg.to} หรือไม่ได้เชื่อมต่อ` });
+        sendJSON(ws, {
+          type: "error",
+          message: `ไม่พบผู้ใช้ ${msg.to} หรือไม่ได้เชื่อมต่อ`,
+        });
         return;
       }
       sendJSON(recipient.ws, {
