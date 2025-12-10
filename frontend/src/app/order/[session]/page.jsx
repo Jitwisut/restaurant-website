@@ -116,7 +116,23 @@ export default function OrderPage() {
         try {
           const msg = JSON.parse(e.data);
           console.log("WS msg:", msg);
-
+          if (msg.type === "table_closed") {
+            toast.error("โต๊ะถูกปิดแล้ว ขอบคุณที่ใช้บริการครับ", {
+              duration: 5000,
+              icon: "🔒",
+            });
+            setCart([]);
+            setModalOpen(false);
+            setCartModalOpen(false);
+            setSending(false);
+            if (wsRef.current) {
+              wsRef.current.close();
+            }
+            setTimeout(() => {
+              router.replace("/table-closed");
+            }, 2000);
+            return;
+          }
           // ✅ รับ system message เมื่อส่ง order สำเร็จ
           if (msg.type === "system") {
             // เช็คว่าเป็นการตอบกลับ order หรือไม่
@@ -185,8 +201,8 @@ export default function OrderPage() {
                 msg.status === "done"
                   ? "🍽️"
                   : msg.status === "rejected"
-                    ? "❌"
-                    : "👨‍🍳",
+                  ? "❌"
+                  : "👨‍🍳",
               duration: 5000,
             });
           }
@@ -211,7 +227,6 @@ export default function OrderPage() {
     };
   }, [connectWebSocket]);
   const callStaff = () => {
-
     // 1. เช็คว่าต่อ WS ติดไหม
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       toast.error("ไม่สามารถเชื่อมต่อพนักงานได้ กรุณารีเฟรชหน้าจอ");
@@ -226,16 +241,17 @@ export default function OrderPage() {
 
     // 3. ส่งข้อมูล
     try {
-      wsRef.current.send(JSON.stringify({
-        type: "call_staff",
-        table_number: table.table_number // ส่งเลขโต๊ะไปด้วย
-      }));
+      wsRef.current.send(
+        JSON.stringify({
+          type: "call_staff",
+          table_number: table.table_number, // ส่งเลขโต๊ะไปด้วย
+        })
+      );
       return true; // บอกลูกว่าส่งสำเร็จ
     } catch (err) {
       console.error("Send error:", err);
       return false;
     }
-
   };
   // ================================
   // LOAD DATA
@@ -414,8 +430,8 @@ export default function OrderPage() {
         i.item.id === id && i.qty + delta <= 0
           ? []
           : i.item.id === id
-            ? [{ ...i, qty: i.qty + delta }]
-            : [i]
+          ? [{ ...i, qty: i.qty + delta }]
+          : [i]
       )
     );
   };
@@ -471,6 +487,7 @@ export default function OrderPage() {
           price: c.item.price,
         })),
       },
+      session: sessionHash,
       table_number: tableNumber, // ส่งเป็น string
     };
 
@@ -635,10 +652,11 @@ export default function OrderPage() {
               </select>
               <button
                 onClick={() => setShowFilters(!showFilters)}
-                className={`p-2 lg:p-3 rounded-2xl border transition-all ${showFilters
-                  ? "bg-purple-500 text-white border-purple-500"
-                  : "bg-white/70 text-gray-700 border-gray-200 hover:border-purple-400"
-                  }`}
+                className={`p-2 lg:p-3 rounded-2xl border transition-all ${
+                  showFilters
+                    ? "bg-purple-500 text-white border-purple-500"
+                    : "bg-white/70 text-gray-700 border-gray-200 hover:border-purple-400"
+                }`}
                 aria-label="แสดง/ซ่อนตัวกรอง"
               >
                 <Filter className="h-4 w-4 lg:h-5 lg:w-5" />
@@ -689,10 +707,11 @@ export default function OrderPage() {
                   <button
                     key={cat}
                     onClick={() => setSelectedCategory(cat)}
-                    className={`px-3 py-1 lg:px-4 lg:py-2 rounded-xl lg:rounded-2xl font-medium transition-all duration-300 shadow-md hover:shadow-lg text-sm lg:text-base ${selectedCategory === cat
-                      ? "bg-gradient-to-r from-purple-500 to-pink-500 text-white"
-                      : "bg-white/80 text-gray-700 hover:bg-purple-50 border border-gray-200 backdrop-blur-sm"
-                      }`}
+                    className={`px-3 py-1 lg:px-4 lg:py-2 rounded-xl lg:rounded-2xl font-medium transition-all duration-300 shadow-md hover:shadow-lg text-sm lg:text-base ${
+                      selectedCategory === cat
+                        ? "bg-gradient-to-r from-purple-500 to-pink-500 text-white"
+                        : "bg-white/80 text-gray-700 hover:bg-purple-50 border border-gray-200 backdrop-blur-sm"
+                    }`}
                   >
                     {cat}
                   </button>
@@ -747,10 +766,11 @@ export default function OrderPage() {
                         <div className="flex space-x-1 lg:space-x-2">
                           <button
                             onClick={() => toggleFavorite(item.id)}
-                            className={`p-1 lg:p-2 rounded-full backdrop-blur-sm transition-all duration-300 ${isFavorite
-                              ? "bg-red-500 text-white shadow-md"
-                              : "bg-white/80 text-gray-600 hover:bg-red-50"
-                              }`}
+                            className={`p-1 lg:p-2 rounded-full backdrop-blur-sm transition-all duration-300 ${
+                              isFavorite
+                                ? "bg-red-500 text-white shadow-md"
+                                : "bg-white/80 text-gray-600 hover:bg-red-50"
+                            }`}
                             aria-label={
                               isFavorite
                                 ? "ลบออกจากรายการโปรด"
@@ -758,8 +778,9 @@ export default function OrderPage() {
                             }
                           >
                             <Heart
-                              className={`h-3 w-3 lg:h-4 lg:w-4 ${isFavorite ? "fill-current" : ""
-                                }`}
+                              className={`h-3 w-3 lg:h-4 lg:w-4 ${
+                                isFavorite ? "fill-current" : ""
+                              }`}
                             />
                           </button>
                           <button

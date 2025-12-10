@@ -6,11 +6,12 @@ import Link from "next/link";
 import MenuUpload from "./components/menupload";
 import Swal from "sweetalert2";
 const api = process.env.NEXT_PUBLIC_BACKEND_URL;
+const ws_base = process.env.NEXT_PUBLIC_API_WS;
 
 export default function RestaurantDashboard() {
-  useEffect(() => {
+  /* useEffect(() => {
     console.log("🔵 Attempting to connect WebSocket...");
-    wsRef.current = new WebSocket("ws://localhost:4000/ws/admin?role=admin");
+    wsRef.current = new WebSocket(`${ws_base}/ws/admin?role=admin`);
     wsRef.current.onopen = () => {
       console.log("WebSocket connected");
       setConnected(true);
@@ -18,20 +19,19 @@ export default function RestaurantDashboard() {
     wsRef.current.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data);
-        if (data.type === 'call_staff') {
+        if (data.type === "call_staff") {
           Swal.fire({
             title: `🔔 โต๊ะ ${data.table_number} เรียกพนักงาน!`,
             text: `เวลา: ${new Date(data.timestamp).toLocaleTimeString()}`,
-            icon: 'warning',
-            confirmButtonText: 'รับทราบ',
+            icon: "warning",
+            confirmButtonText: "รับทราบ",
           });
         }
       } catch (error) {
-        console.log(error.message)
+        console.log(error.message);
       }
-    }
-
-  }, []);
+    };
+  }, []);*/
 
   const wsRef = useRef(null);
   const [connected, setConnected] = useState(false);
@@ -44,13 +44,17 @@ export default function RestaurantDashboard() {
   const [imagePreview, setImagePreview] = useState(null);
   const [submitLoading, setSubmitLoading] = useState(false);
   const [menuData, setMenuData] = useState({
-    name: '',
-    price: '',
-    description: '',
-    category: '',
-    ingredients: '',
-    isAvailable: true
+    name: "",
+    price: "",
+    description: "",
+    category: "",
+    ingredients: "",
+    isAvailable: true,
   });
+
+  // เพิ่ม Auth State
+  const [isAuthChecking, setIsAuthChecking] = useState(true);
+  const [isAuthorized, setIsAuthorized] = useState(false);
 
   const router = useRouter();
 
@@ -74,26 +78,26 @@ export default function RestaurantDashboard() {
     try {
       // สร้าง FormData เพื่อส่งข้อมูลรวมถึงรูปภาพ
       const formData = new FormData();
-      formData.append('name', menuData.name);
-      formData.append('description', menuData.description);
-      formData.append('price', menuData.price);
-      formData.append('category', menuData.category);
-      formData.append('ingredients', menuData.ingredients || '');
-      formData.append('isAvailable', menuData.isAvailable.toString());
+      formData.append("name", menuData.name);
+      formData.append("description", menuData.description);
+      formData.append("price", menuData.price);
+      formData.append("category", menuData.category);
+      formData.append("ingredients", menuData.ingredients || "");
+      formData.append("isAvailable", menuData.isAvailable.toString());
 
       // เพิ่มรูปภาพ (ถ้ามี)
       const imageInput = document.querySelector('input[type="file"]');
       if (imageInput?.files?.[0]) {
-        formData.append('image', imageInput.files[0]);
+        formData.append("image", imageInput.files[0]);
       }
 
       const response = await axios.post(`${api}/admin/upload-menu`, formData, {
         headers: {
-          'Content-Type': 'multipart/form-data',
+          "Content-Type": "multipart/form-data",
         },
       });
 
-      console.log('Response:', response.data);
+      console.log("Response:", response.data);
       if (response.status == 200) {
         Swal.fire({
           icon: "success",
@@ -105,8 +109,11 @@ export default function RestaurantDashboard() {
       }
       resetMenuForm();
     } catch (error) {
-      console.error('Error uploading menu:', error);
-      const errorMessage = error?.response?.data?.message || error?.message || 'เกิดข้อผิดพลาดในการเพิ่มเมนู';
+      console.error("Error uploading menu:", error);
+      const errorMessage =
+        error?.response?.data?.message ||
+        error?.message ||
+        "เกิดข้อผิดพลาดในการเพิ่มเมนู";
       Swal.fire({
         icon: "error",
         title: "เกิดข้อผิดพลาด",
@@ -123,12 +130,12 @@ export default function RestaurantDashboard() {
   const resetMenuForm = () => {
     setmenushow(false);
     setMenuData({
-      name: '',
-      description: '',
-      price: '',
-      category: '',
-      ingredients: '',
-      isAvailable: true
+      name: "",
+      description: "",
+      price: "",
+      category: "",
+      ingredients: "",
+      isAvailable: true,
     });
     setImagePreview(null);
   };
@@ -138,39 +145,109 @@ export default function RestaurantDashboard() {
     const checkAdmin = async () => {
       try {
         const token = sessionStorage.getItem("auth");
+        if (!token) {
+          router.replace("/signin");
+          return;
+        }
         const result = await axios.get(`${api}/middleware/admin`, {
           headers: {
             Authorization: `Bearer ${token}`,
           },
         });
-        setUsername("Admin");
-        console.log("You are admin");
+        if (result.status === 200) {
+          setIsAuthorized(true);
+          setUsername("Admin");
+          fetchtable();
+          connectWebSocket();
+        }
       } catch (error) {
         console.log("You not admin");
-        router.push("/signin");
+        router.replace("/signin");
+      } finally {
+        setIsAuthChecking(false);
       }
     };
-    const fetchtable = async () => {
-      try {
-        const result = await axios.get(`${api}/tables/gettable`);
-        const availablecount = result.data.tables.filter(
-          (index) => index.status === "available"
-        ).length;
-        console.log("result from fetchtable:", result.data.tables);
-        const reservecount = result.data.tables.filter(
-          (index) => index.status === "open"
-        ).length;
-        setTables(result.data.tables);
-        setAvailable(availablecount);
-        setReserved(reservecount);
-      } catch (error) {
-        console.log("Error:", error.message);
-      }
-    };
-    checkAdmin();
-    fetchtable();
-  }, [router]);
 
+    checkAdmin();
+  }, [router]);
+  // ⭐ แยก function WebSocket ออกมา
+  const connectWebSocket = () => {
+    console.log("🔵 Attempting to connect WebSocket...");
+    wsRef.current = new WebSocket(`${ws_base}/ws/admin?role=admin`);
+
+    wsRef.current.onopen = () => {
+      console.log("WebSocket connected");
+      setConnected(true);
+    };
+
+    wsRef.current.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.type === "call_staff") {
+          Swal.fire({
+            title: `🔔 โต๊ะ ${data.table_number} เรียกพนักงาน!`,
+            text: `เวลา: ${new Date(data.timestamp).toLocaleTimeString()}`,
+            icon: "warning",
+            confirmButtonText: "รับทราบ",
+          });
+        }
+      } catch (error) {
+        console.log(error.message);
+      }
+    };
+
+    // ⭐ Cleanup WebSocket เมื่อ component unmount
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+    };
+  };
+  const fetchtable = async () => {
+    try {
+      const result = await axios.get(`${api}/tables/gettable`);
+      const availablecount = result.data.tables.filter(
+        (index) => index.status === "available"
+      ).length;
+      console.log("result from fetchtable:", result.data.tables);
+      const reservecount = result.data.tables.filter(
+        (index) => index.status === "open"
+      ).length;
+      setTables(result.data.tables);
+      setAvailable(availablecount);
+      setReserved(reservecount);
+    } catch (error) {
+      console.log("Error:", error.message);
+    }
+  };
+  // ⭐ แสดง Loading Screen ขณะตรวจสอบสิทธิ์
+  if (isAuthChecking) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-amber-50 via-orange-50 to-yellow-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 flex items-center justify-center">
+        <div className="text-center space-y-6">
+          <div className="relative w-24 h-24 mx-auto">
+            <div className="absolute inset-0 border-4 border-amber-200 dark:border-amber-800 rounded-full"></div>
+            <div className="absolute inset-0 border-4 border-t-amber-600 dark:border-t-amber-400 rounded-full animate-spin"></div>
+            <div className="absolute inset-0 flex items-center justify-center text-4xl">
+              🍽️
+            </div>
+          </div>
+          <div className="space-y-2">
+            <h3 className="text-2xl font-bold text-gray-800 dark:text-white">
+              RestaurantOS
+            </h3>
+            <p className="text-gray-600 dark:text-gray-400">
+              กำลังตรวจสอบสิทธิ์การเข้าถึง...
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  // ⭐ ถ้าไม่มีสิทธิ์ ไม่แสดงอะไรเลย
+  if (!isAuthorized) {
+    return null;
+  }
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       {/* Top Navigation Bar */}
@@ -443,12 +520,13 @@ export default function RestaurantDashboard() {
                     </div>
                     <span
                       className={`text-xs font-semibold px-3 py-1 rounded-full
-                      ${order.status === "พร้อมเสิร์ฟ"
+                      ${
+                        order.status === "พร้อมเสิร์ฟ"
                           ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400"
                           : order.status === "กำลังทำ"
-                            ? "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400"
-                            : "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400"
-                        }`}
+                          ? "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400"
+                          : "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400"
+                      }`}
                     >
                       {order.status}
                     </span>

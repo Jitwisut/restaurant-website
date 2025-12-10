@@ -66,8 +66,9 @@ const FormInput = ({
       <input
         {...props}
         disabled={loading || props.disabled}
-        className={`w-full border p-3 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 bg-slate-50 hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed ${error ? "border-red-300 bg-red-50" : "border-slate-200"
-          } ${props.className || ""}`}
+        className={`w-full border p-3 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 bg-slate-50 hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed ${
+          error ? "border-red-300 bg-red-50" : "border-slate-200"
+        } ${props.className || ""}`}
         aria-invalid={error ? "true" : "false"}
         aria-describedby={error ? `${props.id}-error` : undefined}
       />
@@ -202,8 +203,9 @@ const StatCard = ({
       </div>
       <div className="space-y-1">
         <div
-          className={`text-2xl lg:text-3xl font-bold ${colorClasses[color].split(" ")[4]
-            }`}
+          className={`text-2xl lg:text-3xl font-bold ${
+            colorClasses[color].split(" ")[4]
+          }`}
         >
           {loading ? <LoadingSpinner size="sm" /> : value ?? 0}
         </div>
@@ -251,6 +253,9 @@ const AdminUserManagement = () => {
   // Debounced search
   const debouncedSearchTerm = useDebounce(searchTerm, 300);
 
+  const [isAuthChecking, setIsAuthChecking] = useState(true);
+  const [isAuthorized, setIsAuthorized] = useState(false);
+
   // Menu Upload States
   const [menuData, setMenuData] = useState({
     name: "",
@@ -268,7 +273,7 @@ const AdminUserManagement = () => {
     isOpen: false,
     title: "",
     message: "",
-    onConfirm: () => { },
+    onConfirm: () => {},
     type: "danger",
   });
 
@@ -304,27 +309,35 @@ const AdminUserManagement = () => {
   useEffect(() => {
     const admin = async () => {
       const token = sessionStorage.getItem("auth");
+      if (!token) {
+        router.replace("/");
+        return;
+      }
       try {
         const res = await axios.get(`${baseurl}/middleware/admin`, {
           headers: { Authorization: `Bearer ${token}` },
           withCredentials: true,
         });
-        console.log("Admin access granted");
+        if (res.status === 200) {
+          setIsAuthorized(true);
+          await fetchUser();
+        }
       } catch (error) {
         if (error.response?.status === 401) {
           console.log("ยังไม่ได้ login");
-          router.push("/");
+          router.replace("/");
         } else if (error.response?.status === 403) {
           console.log("ไม่ใช่ admin");
-          router.push("/");
+          router.replace("/");
         } else {
           console.log("เกิดข้อผิดพลาดอื่น:", error);
         }
+      } finally {
+        setIsAuthChecking(false);
       }
     };
 
     admin();
-    fetchUser();
   }, [router]);
 
   // Fetch Users Data
@@ -507,9 +520,9 @@ const AdminUserManagement = () => {
       users.map((user) =>
         user.id === userId
           ? {
-            ...user,
-            status: user.status === "active" ? "inactive" : "active",
-          }
+              ...user,
+              status: user.status === "active" ? "inactive" : "active",
+            }
           : user
       )
     );
@@ -644,6 +657,23 @@ const AdminUserManagement = () => {
     inactive: users.filter((u) => u.status === "inactive").length,
   };
 
+  // แสดง Loading Screen ขณะตรวจสอบสิทธิ์
+  if (isAuthChecking) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 flex items-center justify-center">
+        <div className="text-center space-y-4">
+          <LoadingSpinner size="lg" className="mx-auto text-blue-600" />
+          <p className="text-slate-600 font-medium">
+            กำลังตรวจสอบสิทธิ์การเข้าถึง...
+          </p>
+        </div>
+      </div>
+    );
+  }
+  // ถ้าไม่มีสิทธิ์ ไม่แสดงอะไรเลย (จะถูก redirect อยู่แล้ว)
+  if (!isAuthorized) {
+    return null;
+  }
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100">
       <div className="max-w-7xl mx-auto p-4 lg:p-6">
@@ -666,8 +696,9 @@ const AdminUserManagement = () => {
                 aria-label="รีเฟรชข้อมูล"
               >
                 <RefreshCw
-                  className={`w-5 h-5 text-slate-600 ${loading ? "animate-spin" : ""
-                    }`}
+                  className={`w-5 h-5 text-slate-600 ${
+                    loading ? "animate-spin" : ""
+                  }`}
                 />
               </button>
               <button className="p-2 rounded-xl bg-white shadow-md hover:shadow-lg transition-all duration-200 hover:scale-105">
@@ -1206,16 +1237,18 @@ const AdminUserManagement = () => {
                       </td>
                       <td className="px-4 lg:px-6 py-4">
                         <span
-                          className={`inline-flex items-center px-2 lg:px-3 py-1 rounded-full text-xs font-semibold ${user.status === "active"
-                            ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
-                            : "bg-slate-100 text-slate-800 border border-slate-200"
-                            }`}
+                          className={`inline-flex items-center px-2 lg:px-3 py-1 rounded-full text-xs font-semibold ${
+                            user.status === "active"
+                              ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                              : "bg-slate-100 text-slate-800 border border-slate-200"
+                          }`}
                         >
                           <div
-                            className={`w-2 h-2 rounded-full mr-2 ${user.status === "active"
-                              ? "bg-emerald-500"
-                              : "bg-slate-400"
-                              }`}
+                            className={`w-2 h-2 rounded-full mr-2 ${
+                              user.status === "active"
+                                ? "bg-emerald-500"
+                                : "bg-slate-400"
+                            }`}
                           ></div>
                           {user.status === "active"
                             ? "ใช้งานอยู่"
@@ -1271,8 +1304,8 @@ const AdminUserManagement = () => {
                           </div>
                           <div className="text-sm text-slate-400 max-w-md text-center">
                             {debouncedSearchTerm ||
-                              filterRole !== "all" ||
-                              filterStatus !== "all"
+                            filterRole !== "all" ||
+                            filterStatus !== "all"
                               ? "ลองเปลี่ยนเงื่อนไขการค้นหาหรือกรองข้อมูล"
                               : "ยังไม่มีผู้ใช้ในระบบ เริ่มต้นด้วยการเพิ่มผู้ใช้ใหม่"}
                           </div>

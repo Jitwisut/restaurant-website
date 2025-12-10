@@ -23,9 +23,9 @@ app
   .use(
     cors({
       origin: (request) => {
-        const origin = request.headers.get('origin');
+        const origin = request.headers.get("origin");
         // อนุญาต localhost สำหรับ development
-        if (origin?.includes('localhost')) return true;
+        if (origin?.includes("localhost")) return true;
         // อนุญาต origin จาก env
         return origin === url || origin === url2;
       },
@@ -43,7 +43,24 @@ app
     set.headers["Content-Security-Policy"] =
       "default-src 'self'; connect-src 'self' https://backend-restaurant-deploy.onrender.com https://frontend-restaurant-97nb.vercel.app";
   })
-
+  .onError(({ code, error, set }) => {
+    if (code === "VALIDATION") {
+      set.status = error.status;
+      return {
+        status: "error",
+        message: "Validation failed",
+        // error.all จะบอกรายละเอียดทั้งหมดว่า field ไหนผิด
+        errors: error.all,
+      };
+    }
+    if (code === "NOT_FOUND") {
+      set.status = 400;
+      return {
+        status: "error",
+        message: "Not found page",
+      };
+    }
+  })
   .use(elysiaHelmet({}))
 
   .use(
