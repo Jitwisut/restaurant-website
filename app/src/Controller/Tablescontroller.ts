@@ -166,27 +166,7 @@ export const Tablecontroller = {
     set.status = 200;
     return { message: "พบโต๊ะ", table: table };
   },
-  orderhistory: async ({
-    set,
 
-    body,
-  }: {
-    set: Context["set"];
-    params: Context["params"];
-    body: { table_number: Number };
-  }) => {
-    const tablenumber = body.table_number;
-    if (!tablenumber) {
-      set.status = 404;
-      return { message: "No table number" };
-    }
-    const result = await db.query(
-      "SELECT * FROM orders JOIN order_items ON orders.id=order_items.order_id WHERE table_number=$1",
-      [tablenumber]
-    );
-    console.log("order", result.rows);
-    return { order: result.rows };
-  },
   ordersuccess: async ({
     set,
     body,

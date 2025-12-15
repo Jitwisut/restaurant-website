@@ -1,20 +1,11 @@
 import { Database } from "bun:sqlite";
 import bcryptjs from "bcryptjs";
 import { getDB } from "../lib/connect";
+import { SigninHandler } from "../type/type";
 const db = getDB();
 
 export const Authcontroller = {
-  signin: async ({
-    body,
-    set,
-    jwt,
-    cookie,
-  }: {
-    body: { username: string; password: string };
-    set: any;
-    jwt: any;
-    cookie: any;
-  }) => {
+  signin: async ({ body, set, jwt }: SigninHandler) => {
     const { username, password } = body;
 
     if (!username || !password) {

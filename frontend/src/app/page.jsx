@@ -261,9 +261,12 @@ export default function RestaurantDashboard() {
               <button className="px-4 py-2 bg-white dark:bg-gray-600 rounded-md shadow-sm font-medium text-sm">
                 Dashboard
               </button>
-              <button className="px-4 py-2 hover:bg-white/50 dark:hover:bg-gray-600/50 rounded-md font-medium text-sm text-gray-600 dark:text-gray-300">
+              <Link
+                href="/orders"
+                className="px-4 py-2 hover:bg-white/50 dark:hover:bg-gray-600/50 rounded-md font-medium text-sm text-gray-600 dark:text-gray-300"
+              >
                 Orders
-              </button>
+              </Link>
               <Link
                 href="/tables"
                 className="px-4 py-2 hover:bg-white/50 dark:hover:bg-gray-600/50 rounded-md font-medium text-sm text-gray-600 dark:text-gray-300"
@@ -303,7 +306,7 @@ export default function RestaurantDashboard() {
         <aside className="hidden lg:block w-64 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 min-h-[calc(100vh-73px)]">
           <div className="p-4 space-y-2">
             <div className="px-4 py-2 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-              เมนูหล ัก
+              เมนูหลัก
             </div>
             <a
               href="#"

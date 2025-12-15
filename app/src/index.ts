@@ -11,6 +11,7 @@ import { middlewareadmin } from "./router/middlewarerouter";
 import { menurouter } from "./router/menurouter";
 import { web } from "./router/websocket";
 import { profilerouter } from "./router/Profilerouter";
+import { Orderrouter } from "./router/Orderrouter";
 const port = Number(Bun.env.PORT);
 const jwtsecret = Bun.env.JWT_SECRET as string;
 const url = Bun.env.ORIGIN_URL;
@@ -78,6 +79,7 @@ app
   .use(Adminrouter)
   .use(Auths)
   .use(menurouter)
+  .use(Orderrouter)
   .use(web)
 
   .listen({ port, hostname: "0.0.0.0" });

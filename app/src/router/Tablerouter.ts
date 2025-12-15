@@ -27,9 +27,14 @@ export const Tablerouter = (app: Elysia) => {
     app
       .use(gettableLimit)
       .post("/opentable", Tablecontroller.opentable)
-      .post("/closetable", Tablecontroller.closetable)
+      .post("/closetable", Tablecontroller.closetable, {
+        body: t.Object({
+          number: t.String(),
+        }),
+      })
       .get("/checktable/:session", Tablecontroller.checktabel)
-      .post("/orderhistory", Tablecontroller.orderhistory, {
+     
+      .post("/ordersuccess", Tablecontroller.ordersuccess, {
         body: t.Object({
           table_number: t.Number({
             minimum: 1,
@@ -37,8 +42,7 @@ export const Tablerouter = (app: Elysia) => {
             error: "Quantity must be between 1-11",
           }),
         }),
-      })
-      .post("/ordersuccess", Tablecontroller.ordersuccess);
+      });
     return app;
   });
 };

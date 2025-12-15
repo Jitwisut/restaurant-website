@@ -26,3 +26,10 @@ export type AppContext = Context & {
   set: Context["set"];
   headers: Context["headers"];
 };
+
+export type SigninHandler = {
+  body: { username: string; password: string };
+  set: any;
+  jwt: any;
+  cookie: any;
+};

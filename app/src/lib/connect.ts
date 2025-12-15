@@ -14,3 +14,5 @@ export function getDB() {
   }
   return pool;
 }
+
+export const db = getDB();
