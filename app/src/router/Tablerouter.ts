@@ -19,30 +19,36 @@ export const Tablerouter = (app: Elysia) => {
                 "Retry-After": "60",
                 "Custom-Header": "custom",
               }),
-            }
+            },
           ),
-        })
+        }),
       )
       .get("/gettable", Tablecontroller.gettable);
     app
       .use(gettableLimit)
       .post("/opentable", Tablecontroller.opentable)
-      .post("/closetable", Tablecontroller.closetable, {
+      .post(
+        "/closetable",
+        Tablecontroller.closetable /*, {
         body: t.Object({
-          number: t.String(),
+          number: t.Number(),
         }),
-      })
+      }*/,
+      )
       .get("/checktable/:session", Tablecontroller.checktabel)
-     
+
       .post("/ordersuccess", Tablecontroller.ordersuccess, {
         body: t.Object({
-          table_number: t.Number({
-            minimum: 1,
-            maximum: 11,
-            error: "Quantity must be between 1-11",
-          }),
+          table_number: t.Optional(
+            t.Number({
+              minimum: 1,
+              maximum: 11,
+              error: "Quantity must be between 1-11",
+            }),
+          ),
         }),
-      });
+      })
+      .post("/addtable", Tablecontroller.addtable);
     return app;
   });
 };

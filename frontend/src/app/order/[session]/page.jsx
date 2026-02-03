@@ -99,7 +99,7 @@ export default function OrderPage() {
           setWsStatus("reconnecting");
           reconnectTimeoutRef.current = setTimeout(
             connectWebSocket,
-            RECONNECT_DELAY
+            RECONNECT_DELAY,
           );
         } else {
           setWsStatus("error");
@@ -178,7 +178,7 @@ export default function OrderPage() {
                 "ครัวยังไม่พร้อมรับออร์เดอร์\n• แจ้งพนักงาน\n• หรือลองใหม่อีกครั้ง",
                 {
                   duration: 6000,
-                }
+                },
               );
             } else {
               toast.error(msg.message, { duration: 4000 });
@@ -201,8 +201,8 @@ export default function OrderPage() {
                 msg.status === "done"
                   ? "🍽️"
                   : msg.status === "rejected"
-                  ? "❌"
-                  : "👨‍🍳",
+                    ? "❌"
+                    : "👨‍🍳",
               duration: 5000,
             });
           }
@@ -245,7 +245,7 @@ export default function OrderPage() {
         JSON.stringify({
           type: "call_staff",
           table_number: table.table_number, // ส่งเลขโต๊ะไปด้วย
-        })
+        }),
       );
       return true; // บอกลูกว่าส่งสำเร็จ
     } catch (err) {
@@ -285,17 +285,17 @@ export default function OrderPage() {
           console.log(
             "[TABLE] Table Number (original):",
             tableNumber,
-            typeof tableNumber
+            typeof tableNumber,
           );
           console.log(
             "[TABLE] Table Number (converted):",
             tableNumberStr,
-            typeof tableNumberStr
+            typeof tableNumberStr,
           );
 
           if (!tableNumberStr) {
             console.error(
-              "[TABLE] ERROR: No table_number found in API response"
+              "[TABLE] ERROR: No table_number found in API response",
             );
             toast.error("ข้อมูลโต๊ะไม่ครบถ้วน กรุณาแจ้งพนักงาน");
           }
@@ -358,7 +358,7 @@ export default function OrderPage() {
 
   const categories = useMemo(
     () => ["ทั้งหมด", ...new Set(menu.map((i) => i.category).filter(Boolean))],
-    [menu]
+    [menu],
   );
 
   const filteredMenu = useMemo(() => {
@@ -371,7 +371,7 @@ export default function OrderPage() {
       filtered = filtered.filter(
         (i) =>
           i.name.toLowerCase().includes(s) ||
-          i.description?.toLowerCase().includes(s)
+          i.description?.toLowerCase().includes(s),
       );
     }
 
@@ -391,12 +391,12 @@ export default function OrderPage() {
 
   const totalPrice = useMemo(
     () => cart.reduce((sum, i) => sum + i.item.price * i.qty, 0),
-    [cart]
+    [cart],
   );
 
   const totalItems = useMemo(
     () => cart.reduce((sum, i) => sum + i.qty, 0),
-    [cart]
+    [cart],
   );
 
   const addToCart = (item) => {
@@ -430,9 +430,9 @@ export default function OrderPage() {
         i.item.id === id && i.qty + delta <= 0
           ? []
           : i.item.id === id
-          ? [{ ...i, qty: i.qty + delta }]
-          : [i]
-      )
+            ? [{ ...i, qty: i.qty + delta }]
+            : [i],
+      ),
     );
   };
 
@@ -516,7 +516,7 @@ export default function OrderPage() {
     setLoading(true);
     const number = tablenumber;
     try {
-      const data = await axios.post(`${API_BASE}/tables/orderhistory`, {
+      const data = await axios.post(`${API_BASE}/order/orderhistory`, {
         table_number: number,
       });
       setOrder(data.data.order);

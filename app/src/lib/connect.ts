@@ -8,11 +8,11 @@ let pool: any = null;
 export function getDB() {
   if (!pool) {
     pool = new Pool({
-      connectionString: Bun.env.DATABASE_URL,
+      connectionString: process.env.DATABASE_URL,
     });
     console.log("✅ DB Connected");
   }
   return pool;
 }
 
-export const db = getDB();
+//export const db = getDB();

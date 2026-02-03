@@ -1,5 +1,6 @@
 import { Context } from "elysia";
-import { db } from "../lib/connect";
+import { getDB } from "../lib/connect";
+const db = getDB();
 export const Orderscontroller = {
   orderhistory: async ({
     set,

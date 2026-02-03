@@ -28,7 +28,7 @@ export const Authcontroller = {
       }
       const isMatch = await bcryptjs.compare(
         String(password),
-        String(user.password)
+        String(user.password),
       );
       if (!isMatch) {
         set.status = 400;
@@ -54,7 +54,7 @@ export const Authcontroller = {
 
       let redirectpath;
       if (user.role === "admin") {
-        redirectpath = "/admin";
+        redirectpath = "/";
       } else if (user.role === "kitchen") {
         redirectpath = "/kitchen";
       } else if (user.role === "user") {
@@ -96,7 +96,7 @@ export const Authcontroller = {
     try {
       const existing = await db.query(
         "SELECT * FROM users WHERE username = $1 OR email = $2",
-        [username, email]
+        [username, email],
       );
 
       // ถ้ามีข้อมูลแล้ว
@@ -109,7 +109,7 @@ export const Authcontroller = {
 
       await db.query(
         "INSERT INTO users (username, email, password, role) VALUES ($1, $2,$3,$4)",
-        [username, email, hashedPassword, role]
+        [username, email, hashedPassword, role],
       );
 
       set.status = 201;

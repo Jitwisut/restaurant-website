@@ -207,11 +207,11 @@ export default function RestaurantDashboard() {
     try {
       const result = await axios.get(`${api}/tables/gettable`);
       const availablecount = result.data.tables.filter(
-        (index) => index.status === "available"
+        (index) => index.status === "available",
       ).length;
       console.log("result from fetchtable:", result.data.tables);
       const reservecount = result.data.tables.filter(
-        (index) => index.status === "open"
+        (index) => index.status === "open",
       ).length;
       setTables(result.data.tables);
       setAvailable(availablecount);
@@ -527,8 +527,8 @@ export default function RestaurantDashboard() {
                         order.status === "พร้อมเสิร์ฟ"
                           ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400"
                           : order.status === "กำลังทำ"
-                          ? "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400"
-                          : "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400"
+                            ? "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400"
+                            : "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400"
                       }`}
                     >
                       {order.status}
@@ -577,15 +577,19 @@ export default function RestaurantDashboard() {
                     เพิ่มเมนู
                   </span>
                 </button>
-
-                <button className="flex flex-col items-center justify-center gap-2 p-4 bg-purple-50 dark:bg-purple-900/20 hover:bg-purple-100 dark:hover:bg-purple-900/30 rounded-lg transition-colors group">
-                  <span className="text-3xl group-hover:scale-110 transition-transform">
-                    📊
-                  </span>
-                  <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">
-                    รายงาน
-                  </span>
-                </button>
+                <Link
+                  href="/orders"
+                  className="flex flex-col items-center justify-center gap-2 p-4 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/30 rounded-lg transition-colors group"
+                >
+                  <button className="flex flex-col items-center justify-center gap-2 p-4 bg-purple-50 dark:bg-purple-900/20 hover:bg-purple-100 dark:hover:bg-purple-900/30 rounded-lg transition-colors group">
+                    <span className="text-3xl group-hover:scale-110 transition-transform">
+                      📊
+                    </span>
+                    <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                      รายงาน
+                    </span>
+                  </button>
+                </Link>
               </div>
 
               <div className="mt-6 p-4 bg-gradient-to-r from-amber-500 to-orange-500 rounded-lg text-white">

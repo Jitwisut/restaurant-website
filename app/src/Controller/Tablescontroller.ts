@@ -7,7 +7,6 @@ import { notifyTableClosed } from "../router/websocket";
 const baseurl = Bun.env.ORIGIN_URL;
 const db = getDB();
 
-const nanoid = randomUUID();
 export const Tablecontroller = {
   gettable: async ({ set }: Context) => {
     const query = "SELECT * FROM tables";
@@ -20,8 +19,8 @@ export const Tablecontroller = {
     await db.query("BEGIN");
     const rawNumber = body.number;
     const tableNumber = parseInt(rawNumber ?? "", 10);
-    const paddedNumber = tableNumber.toString().padStart(2, "0"); // 2 → "02"
-
+    //const paddedNumber = tableNumber.toString().padStart(2, "0"); // 2 → "02"
+    const nanoid = randomUUID();
     if (isNaN(tableNumber) || tableNumber < 1 || tableNumber > 99) {
       set.status = 400;
       return { message: "หมายเลขโต๊ะไม่ถูกต้อง" };
@@ -35,7 +34,7 @@ export const Tablecontroller = {
       const qrBase64 = await QRCode.toDataURL(fullURL); // ✅ async (คงไว้)
       await db.query(
         "INSERT INTO sessions (session_id,table_number,opened_at) VALUES ($1,$2,NOW())",
-        [hash, paddedNumber]
+        [hash, tableNumber],
       );
       const result = await db.query(
         `
@@ -48,7 +47,7 @@ export const Tablecontroller = {
      AND status           = 'available'
    RETURNING table_number, status, opened_at, customer_session, qr_code_url
   `,
-        [hash, qrBase64, paddedNumber]
+        [hash, qrBase64, tableNumber],
       );
 
       if (result.rowCount === 0) {
@@ -81,7 +80,7 @@ export const Tablecontroller = {
   }) => {
     const rawNumber = body.number;
     const tableNumber = parseInt(rawNumber ?? "", 10);
-    const paddedNumber = tableNumber.toString().padStart(2, "0"); // 2 → "02"
+    //const paddedNumber = tableNumber.toString().padStart(2, "0"); // 2 → "02"
     if (isNaN(tableNumber) || tableNumber < 1 || tableNumber > 99) {
       set.status = 400;
       return { message: "หมายเลขโต๊ะไม่ถูกต้อง" };
@@ -90,8 +89,13 @@ export const Tablecontroller = {
     try {
       const current_table = await db.query(
         `SELECT customer_session FROM tables WHERE table_number=$1  AND status <> 'available'`,
-        [paddedNumber]
+        [tableNumber],
       );
+      if (current_table.rowCount === 0) {
+        set.status = 404;
+        return { message: "โต๊ะนี้ไม่มีข้อมูล" };
+      }
+      const closedSessionId = current_table.rows[0].customer_session;
       const stmt = await db.query(
         `
       UPDATE tables
@@ -103,11 +107,11 @@ export const Tablecontroller = {
          AND status <> 'available'
          
     `,
-        [paddedNumber]
+        [tableNumber],
       );
       await db.query(
         "UPDATE sessions SET closed_at=NOW() WHERE session_id=$1",
-        [current_table.rows[0].customer_session]
+        [closedSessionId],
       );
       if (stmt.rowCount === 0) {
         set.status = 404;
@@ -122,12 +126,12 @@ export const Tablecontroller = {
           JSON.stringify({
             type: "table_closed",
             message: "Table has been close",
-          })
+          }),
         );
       }
       const result = await db.query(
         "UPDATE orders SET status='completed' WHERE table_number=$1",
-        [tableNumber]
+        [tableNumber],
       );
 
       return { message: "ปิดโต๊ะเรียบร้อย", table_number: tableNumber };
@@ -181,9 +185,29 @@ export const Tablecontroller = {
     }
     const result = await db.query(
       "UPDATE orders SET status='completed' WHERE table_number=$1",
-      [tablenumber]
+      [tablenumber],
     );
     console.log("order", result.rows);
     return { message: "success" };
+  },
+  addtable: async ({ set }: { set: Context["set"] }) => {
+    try {
+      await db.query("BEGIN");
+      const result = await db.query(
+        "INSERT INTO tables (table_number, status) VALUES ((SELECT COALESCE(MAX(table_number::integer), 0) + 1 FROM tables), 'available') RETURNING table_number",
+      );
+      await db.query("COMMIT");
+      const newtablenumber = parseInt(result.rows[0].table_number);
+      return {
+        success: true,
+        message: `เพิ่มโต๊ะหมายเลข ${newtablenumber}เรียบร้อยแล้ว`,
+        new_table: newtablenumber,
+      };
+    } catch (err: any) {
+      console.error(err.message);
+      await db.query("ROLLBACK");
+      set.status = 500;
+      return { message: "เกิดข้อผิดพลาด" };
+    }
   },
 };

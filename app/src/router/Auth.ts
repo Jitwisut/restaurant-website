@@ -7,10 +7,12 @@ export const Auths = (app: Elysia) => {
     app
 
       .post("/signin", Authcontroller.signin, {
-        body: t.Object({
-          username: t.String(),
-          password: t.String(),
-        }),
+        body: t.Optional(
+          t.Object({
+            username: t.String(),
+            password: t.String(),
+          }),
+        ),
       })
       .post("/signup", Authcontroller.signup, {
         body: t.Object({
