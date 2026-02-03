@@ -68,4 +68,4 @@ jobs:
       - name: Deploy to Render
         if: success()
         run: |
-          curl -X post ${{secrets.RENDER_DEPLOY_HOOK_URL}}
+          curl -X POST ${{secrets.RENDER_DEPLOY_HOOK_URL}}
