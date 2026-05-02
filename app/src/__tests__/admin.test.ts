@@ -1,8 +1,13 @@
-import { describe, test, expect } from "bun:test";
+import { beforeAll, describe, test, expect } from "bun:test";
 import { Elysia } from "elysia";
 import jwt from "@elysiajs/jwt";
 import { Adminrouter } from "../router/Adminrouter";
-import { createTestUser, createMockImageFile } from "./helpers/testUtils";
+import {
+    authHeaders,
+    createTestUser,
+    createMockImageFile,
+    ensureTestRestaurant,
+} from "./helpers/testUtils";
 
 /**
  * Admin Controller Tests
@@ -22,6 +27,10 @@ const createTestApp = () => {
         .use(Adminrouter);
 };
 
+beforeAll(async () => {
+    await ensureTestRestaurant();
+});
+
 describe("Admin Controller - Get All Users", () => {
     test("should retrieve all users", async () => {
         const app = createTestApp();
@@ -29,6 +38,7 @@ describe("Admin Controller - Get All Users", () => {
         const response = await app.handle(
             new Request("http://localhost/admin/getuser", {
                 method: "GET",
+                headers: authHeaders(),
             })
         );
 
@@ -46,6 +56,7 @@ describe("Admin Controller - Get All Users", () => {
         const response = await app.handle(
             new Request("http://localhost/admin/getuser", {
                 method: "GET",
+                headers: authHeaders(),
             })
         );
 
@@ -60,6 +71,7 @@ describe("Admin Controller - Get All Users", () => {
         const response = await app.handle(
             new Request("http://localhost/admin/getuser", {
                 method: "GET",
+                headers: authHeaders(),
             })
         );
 
@@ -84,7 +96,7 @@ describe("Admin Controller - Create User", () => {
         const response = await app.handle(
             new Request("http://localhost/admin/createuser", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...authHeaders() },
                 body: JSON.stringify(newUser),
             })
         );
@@ -100,7 +112,7 @@ describe("Admin Controller - Create User", () => {
         const response = await app.handle(
             new Request("http://localhost/admin/createuser", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...authHeaders() },
                 body: JSON.stringify({
                     username: "testuser",
                     // missing email, password, role
@@ -121,7 +133,7 @@ describe("Admin Controller - Create User", () => {
         await app.handle(
             new Request("http://localhost/admin/createuser", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...authHeaders() },
                 body: JSON.stringify({
                     username,
                     email: `${username}_first@example.com`,
@@ -135,7 +147,7 @@ describe("Admin Controller - Create User", () => {
         const response = await app.handle(
             new Request("http://localhost/admin/createuser", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...authHeaders() },
                 body: JSON.stringify({
                     username,
                     email: `${username}_second@example.com`,
@@ -158,7 +170,7 @@ describe("Admin Controller - Create User", () => {
         await app.handle(
             new Request("http://localhost/admin/createuser", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...authHeaders() },
                 body: JSON.stringify({
                     username: `user1_${Date.now()}`,
                     email,
@@ -172,7 +184,7 @@ describe("Admin Controller - Create User", () => {
         const response = await app.handle(
             new Request("http://localhost/admin/createuser", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...authHeaders() },
                 body: JSON.stringify({
                     username: `user2_${Date.now()}`,
                     email,
@@ -194,7 +206,7 @@ describe("Admin Controller - Create User", () => {
         const response = await app.handle(
             new Request("http://localhost/admin/createuser", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...authHeaders() },
                 body: JSON.stringify({
                     username,
                     email: `${username}@example.com`,
@@ -218,7 +230,7 @@ describe("Admin Controller - Update User", () => {
         await app.handle(
             new Request("http://localhost/admin/createuser", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...authHeaders() },
                 body: JSON.stringify({
                     username: originalUsername,
                     email: `${originalUsername}@example.com`,
@@ -232,7 +244,7 @@ describe("Admin Controller - Update User", () => {
         const response = await app.handle(
             new Request("http://localhost/admin/updateuser", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...authHeaders() },
                 body: JSON.stringify({
                     originuser: originalUsername,
                     username: `${originalUsername}_updated`,
@@ -255,7 +267,7 @@ describe("Admin Controller - Update User", () => {
         await app.handle(
             new Request("http://localhost/admin/createuser", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...authHeaders() },
                 body: JSON.stringify({
                     username,
                     email: `${username}@example.com`,
@@ -269,7 +281,7 @@ describe("Admin Controller - Update User", () => {
         const response = await app.handle(
             new Request("http://localhost/admin/updateuser", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...authHeaders() },
                 body: JSON.stringify({
                     originuser: username,
                     username: username,
@@ -292,7 +304,7 @@ describe("Admin Controller - Delete User", () => {
         await app.handle(
             new Request("http://localhost/admin/createuser", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...authHeaders() },
                 body: JSON.stringify({
                     username,
                     email: `${username}@example.com`,
@@ -306,7 +318,7 @@ describe("Admin Controller - Delete User", () => {
         const response = await app.handle(
             new Request("http://localhost/admin/deleteuser", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...authHeaders() },
                 body: JSON.stringify({
                     username,
                 }),
@@ -324,7 +336,7 @@ describe("Admin Controller - Delete User", () => {
         const response = await app.handle(
             new Request("http://localhost/admin/deleteuser", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", ...authHeaders() },
                 body: JSON.stringify({}),
             })
         );
@@ -349,6 +361,7 @@ describe("Admin Controller - Upload Menu Data", () => {
         const response = await app.handle(
             new Request("http://localhost/admin/upload-menu", {
                 method: "POST",
+                headers: authHeaders(),
                 body: formData,
             })
         );
@@ -368,6 +381,7 @@ describe("Admin Controller - Upload Menu Data", () => {
         const response = await app.handle(
             new Request("http://localhost/admin/upload-menu", {
                 method: "POST",
+                headers: authHeaders(),
                 body: formData,
             })
         );
@@ -385,6 +399,7 @@ describe("Admin Controller - Upload Menu Data", () => {
         const response = await app.handle(
             new Request("http://localhost/admin/upload-menu", {
                 method: "POST",
+                headers: authHeaders(),
                 body: formData,
             })
         );
@@ -405,6 +420,7 @@ describe("Admin Controller - Upload Menu Data", () => {
         const response = await app.handle(
             new Request("http://localhost/admin/upload-menu", {
                 method: "POST",
+                headers: authHeaders(),
                 body: formData,
             })
         );

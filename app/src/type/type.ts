@@ -10,9 +10,10 @@ export interface User {
 export interface Store {
   decode?: {
     decode: {
-      role: "admin" | "user" | "kitchen";
+      role: "admin" | "user" | "kitchen" | "owner" | "staff" | "superadmin";
       username: string;
       email: string;
+      restaurant_id?: number | null;
       iat: number;
     };
   };
@@ -28,7 +29,7 @@ export type AppContext = Context & {
 };
 
 export type SigninHandler = {
-  body: { username: string; password: string };
+  body: { email: string; password: string };
   set: any;
   jwt: any;
   cookie: any;

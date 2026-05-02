@@ -1,106 +1,146 @@
 import { Context } from "elysia";
-import { Database } from "bun:sqlite";
 import bcryptjs from "bcryptjs";
-import { join } from "path";
 import { getDB } from "../lib/connect";
-import { mkdir, writeFile } from "fs/promises";
+import { requireRole } from "../middleware/restaurantScope";
+
 const db = getDB();
+
 export const Admincontroller = {
-  getalluser: async ({ set }: Context) => {
+  getalluser: async (context: Context & { jwt?: any }) => {
+    const { set } = context;
+    const scope = await requireRole(context, ["admin", "owner", "superadmin"]);
+    if (!scope.ok) return scope.response;
+
     try {
-      // ใช้ await สำหรับ async query ใน PostgreSQL
-      const result = await db.query("SELECT * FROM users");
+      const result = await db.query(
+        "SELECT * FROM users WHERE restaurant_id=$1",
+        [scope.restaurantId],
+      );
       const usersRaw = result.rows;
 
-      // ตรวจสอบความถูกต้องก่อนใช้
       if (!Array.isArray(usersRaw)) {
         throw new Error("Query result is not an array");
       }
 
       const users = usersRaw as { role: string }[];
-      const total = users.length;
-
-      // นับจำนวน role แต่ละประเภท
       const roles = users.reduce((acc: Record<string, number>, user) => {
-        if (user.role) {
-          // ตรวจสอบว่า role มีค่า
-          acc[user.role] = (acc[user.role] || 0) + 1;
-        }
+        if (user.role) acc[user.role] = (acc[user.role] || 0) + 1;
         return acc;
       }, {});
 
       set.status = 200;
       return {
         user: users,
-        count: total,
+        count: users.length,
         roles,
       };
     } catch (error) {
       console.error("Backend error:", (error as Error).message);
       set.status = 500;
       return {
-        message: "เกิดข้อผิดพลาดในการดึงข้อมูลผู้ใช้",
+        message: "Error fetching users",
         detail: (error as Error).message,
       };
     }
   },
-  updateuser: async ({
-    set,
-    body,
-  }: {
-    set: Context["set"];
-    body: { username: string; email: string; role: string; originuser: string };
-  }) => {
+
+  updateuser: async (
+    context: Context & {
+      body: { username: string; email: string; role: string; originuser: string };
+      jwt?: any;
+    },
+  ) => {
+    const { set, body } = context;
+    const scope = await requireRole(context, ["admin", "owner", "superadmin"]);
+    if (!scope.ok) return scope.response;
+
     try {
       const { originuser, username, email, role } = body;
+      const duplicateUsername = await db.query(
+        `SELECT 1
+           FROM users
+          WHERE restaurant_id=$1
+            AND username=$2
+            AND username<>$3`,
+        [scope.restaurantId, username, originuser],
+      );
+      if (duplicateUsername.rowCount > 0) {
+        set.status = 400;
+        return { message: "Username already exist in this restaurant" };
+      }
 
-      const query =
-        "UPDATE users SET username=$1, email=$2, role=$3 WHERE username=$4";
-      const result = await db.query(query, [username, email, role, originuser]);
+      const duplicateEmail = await db.query(
+        `SELECT 1
+           FROM users
+          WHERE LOWER(email)=LOWER($1)
+            AND NOT (restaurant_id=$2 AND username=$3)`,
+        [email, scope.restaurantId, originuser],
+      );
+      if (duplicateEmail.rowCount > 0) {
+        set.status = 400;
+        return { message: "Email already exist" };
+      }
+
+      const result = await db.query(
+        "UPDATE users SET username=$1, email=$2, role=$3 WHERE username=$4 AND restaurant_id=$5",
+        [username, email.trim().toLowerCase(), role, originuser, scope.restaurantId],
+      );
+
+      if (result.rowCount === 0) {
+        set.status = 404;
+        return { message: "User not found in this restaurant" };
+      }
 
       set.status = 200;
       return { message: `Success update user ${username}` };
     } catch (error) {
-      console.error("Error in updateuser:", error); // ใช้ logger
+      console.error("Error in updateuser:", error);
       set.status = 500;
       return { message: (error as Error).message };
     }
   },
-  createuser: async ({
-    set,
-    body,
-  }: {
-    set: Context["set"];
-    body: { username: string; email: string; password: string; role: string };
-  }) => {
+
+  createuser: async (
+    context: Context & {
+      body: { username: string; email: string; password: string; role: string };
+      jwt?: any;
+    },
+  ) => {
+    const { set, body } = context;
+    const scope = await requireRole(context, ["admin", "owner", "superadmin"]);
+    if (!scope.ok) return scope.response;
+
     if (!body.username || !body.email || !body.password || !body.role) {
       set.status = 400;
       return { message: "Please fill all field" };
     }
 
     try {
-      let query = "SELECT * FROM users WHERE username=$1";
-      let checkemail = "SELECT email from users WHERE email=$1";
-      const resultemail = await db.query(checkemail, [body.email]);
-      const user = await db.query(query, [body.username]);
+      const resultemail = await db.query(
+        "SELECT email FROM users WHERE LOWER(email)=LOWER($1)",
+        [body.email],
+      );
+      const user = await db.query(
+        "SELECT * FROM users WHERE restaurant_id=$1 AND username=$2",
+        [scope.restaurantId, body.username],
+      );
+
       if (user.rowCount > 0) {
         set.status = 400;
-        return { message: "Username already exist" };
+        return { message: "Username already exist in this restaurant" };
       }
       if (resultemail.rowCount > 0) {
         set.status = 400;
         return { message: "Email already exist" };
       }
+
       const hashpass = await bcryptjs.hash(body.password, 10);
       const email = body.email.trim().toLowerCase();
-      query =
-        "INSERT INTO users (username,email,password,role) VALUES ($1,$2,$3,$4)";
-      const result = await db.query(query, [
-        body.username,
-        email,
-        hashpass,
-        body.role,
-      ]);
+      const result = await db.query(
+        "INSERT INTO users (username,email,password,role,restaurant_id) VALUES ($1,$2,$3,$4,$5)",
+        [body.username, email, hashpass, body.role, scope.restaurantId],
+      );
+
       if (result.rowCount > 0) {
         set.status = 201;
         return { message: "Success create user" };
@@ -110,22 +150,23 @@ export const Admincontroller = {
       return { message: (error as Error).message };
     }
   },
-  uploaddata: async ({
-    body,
-    set,
-  }: {
-    body: {
-      name: string;
-      price: string;
-      image_blob: string;
-      image_mime: string;
-      file: Blob;
-      image: File;
-      category: string;
-      description: string;
-    };
-    set: Context["set"];
-  }) => {
+
+  uploaddata: async (
+    context: Context & {
+      body: {
+        name: string;
+        price: string;
+        image: File;
+        category: string;
+        description: string;
+      };
+      jwt?: any;
+    },
+  ) => {
+    const { body, set } = context;
+    const scope = await requireRole(context, ["admin", "owner", "superadmin"]);
+    if (!scope.ok) return scope.response;
+
     const { name, price, category, description } = body;
     const image = body.image as File;
     const buffer = new Uint8Array(await image.arrayBuffer());
@@ -133,36 +174,47 @@ export const Admincontroller = {
       set.status = 400;
       return { message: "Please Enter value" };
     }
+
     try {
-      db.query(
-        "INSERT INTO menu_new (name,price,image_blob,image_mime,category,description) VALUES ($1,$2,$3,$4,$5,$6)",
-        [name, price, buffer, image.type, category, description]
+      await db.query(
+        "INSERT INTO menu_new (name,price,image_blob,image_mime,category,description,restaurant_id) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+        [name, price, buffer, image.type, category, description, scope.restaurantId],
       );
     } catch (err) {
       console.error("error", err);
+      set.status = 500;
+      return { message: (err as Error).message };
     }
 
     return { message: "Success" };
   },
-  deletedata: async ({
-    body,
-    set,
-  }: {
-    body: { username: string };
-    set: Context["set"];
-  }) => {
+
+  deletedata: async (
+    context: Context & {
+      body: { username: string };
+      jwt?: any;
+    },
+  ) => {
+    const { body, set } = context;
+    const scope = await requireRole(context, ["admin", "owner", "superadmin"]);
+    if (!scope.ok) return scope.response;
+
     const { username } = body;
     if (!username) {
       set.status = 400;
       return { message: "Please Enter username" };
     }
-    const query = "DELETE FROM users WHERE username=$1";
-    const result = db.query(query, [username]);
+
+    const result = await db.query(
+      "DELETE FROM users WHERE username=$1 AND restaurant_id=$2",
+      [username, scope.restaurantId],
+    );
+
     if (result.rowCount === 0) {
-      console.warn("ไม่พบผู้ใช้ที่จะลบ");
-    } else {
-      console.log("แก้ไขเรียบร้อย");
+      set.status = 404;
+      return { message: "User not found in this restaurant" };
     }
+
     set.status = 201;
     return { message: "Success Delete user" };
   },

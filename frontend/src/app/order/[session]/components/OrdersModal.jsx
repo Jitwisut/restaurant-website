@@ -72,7 +72,7 @@ export default function OrdersModal({
             animate="visible"
             exit="hidden"
             onClick={onClose}
-            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4"
+            className="app-modal-overlay bg-black/60 backdrop-blur-sm"
             style={{ margin: 0 }}
           >
             {/* Modal Content */}
@@ -82,7 +82,14 @@ export default function OrdersModal({
               animate="visible"
               exit="exit"
               onClick={(e) => e.stopPropagation()}
-              className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col"
+              className="app-modal-card bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col"
+              style={{
+                "--app-modal-width": "896px",
+                width: "min(896px, calc(100vw - 48px))",
+                maxWidth: "calc(100vw - 48px)",
+                minWidth: "min(360px, calc(100vw - 48px))",
+                maxHeight: "calc(100vh - 48px)",
+              }}
             >
               {/* Header */}
               <div className="bg-gradient-to-r from-orange-500 to-pink-500 p-6 text-white">

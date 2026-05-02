@@ -9,7 +9,7 @@ export const Tablerouter = (app: Elysia) => {
         rateLimit({
           scoping: "scoped",
           duration: 60000, //60s
-          max: 10,
+          max: 60, // 60 requests ต่อนาที
           errorResponse: new Response(
             "มีการเรียกใช้งานมากเกินไป กรุณารอสักครู่",
             {
@@ -36,6 +36,7 @@ export const Tablerouter = (app: Elysia) => {
       }*/,
       )
       .get("/checktable/:session", Tablecontroller.checktabel)
+      .post("/session/:session/guest-token", Tablecontroller.createGuestToken)
 
       .post("/ordersuccess", Tablecontroller.ordersuccess, {
         body: t.Object({

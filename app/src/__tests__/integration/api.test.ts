@@ -8,6 +8,11 @@ import { Tablerouter } from "../../router/Tablerouter";
 import { menurouter } from "../../router/menurouter";
 import { profilerouter } from "../../router/Profilerouter";
 import { Orderrouter } from "../../router/Orderrouter";
+import {
+  authHeaders,
+  createAvailableTable,
+  ensureTestRestaurant,
+} from "../helpers/testUtils";
 
 /**
  * API Integration Tests
@@ -52,6 +57,8 @@ describe("API Integration - Complete Authentication Flow", () => {
     const app = createFullApp();
     const username = `integration_${Date.now()}`;
     const password = "password123";
+    const slug = `integration-tenant-${Date.now()}`;
+    await ensureTestRestaurant(71, { slug });
 
     // Step 1: Signup
     const signupResponse = await app.handle(
@@ -66,6 +73,7 @@ describe("API Integration - Complete Authentication Flow", () => {
           email: `${username}@example.com`,
           password,
           role: "user",
+          restaurant_slug: slug,
         }),
       }),
     );
@@ -74,13 +82,14 @@ describe("API Integration - Complete Authentication Flow", () => {
 
     // Step 2: Signin
     const signinResponse = await app.handle(
-      new Request("http://localhost/auth/signin", {
+      new Request("http://localhost/auth/staff-signin", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Origin: testOrigin,
         },
         body: JSON.stringify({
+          slug,
           username,
           password,
         }),
@@ -111,6 +120,7 @@ describe("API Integration - Complete Authentication Flow", () => {
   test("should handle admin authentication flow", async () => {
     const app = createFullApp();
     const username = `admin_integration_${Date.now()}`;
+    const email = `${username}@example.com`;
 
     // Create admin user
     await app.handle(
@@ -119,9 +129,10 @@ describe("API Integration - Complete Authentication Flow", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           username,
-          email: `${username}@example.com`,
+          email,
           password: "admin123",
           role: "admin",
+          restaurant_slug: `admin-integration-${Date.now()}`,
         }),
       }),
     );
@@ -132,14 +143,14 @@ describe("API Integration - Complete Authentication Flow", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          username,
+          email,
           password: "admin123",
         }),
       }),
     );
 
     const data = await signinResponse.json();
-    expect(data.redirectpath).toBe("/");
+    expect(data.redirectpath).toBe("/restaurant/pending");
   });
 });
 
@@ -197,12 +208,14 @@ describe("API Integration - Table and Order Flow", () => {
   test("should complete table open -> order -> close flow", async () => {
     const app = createFullApp();
     const tableNumber = 8;
+    await ensureTestRestaurant();
+    await createAvailableTable(tableNumber);
 
     // Step 1: Open table
     const openResponse = await app.handle(
       new Request("http://localhost/tables/opentable", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ number: tableNumber }),
       }),
     );
@@ -228,7 +241,7 @@ describe("API Integration - Table and Order Flow", () => {
     const orderResponse = await app.handle(
       new Request("http://localhost/order/orderhistory", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ table_number: tableNumber }),
       }),
     );
@@ -239,7 +252,7 @@ describe("API Integration - Table and Order Flow", () => {
     const closeResponse = await app.handle(
       new Request("http://localhost/tables/closetable", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ number: tableNumber.toString() }),
       }),
     );
@@ -250,12 +263,14 @@ describe("API Integration - Table and Order Flow", () => {
   test("should prevent opening already open table", async () => {
     const app = createFullApp();
     const tableNumber = 9;
+    await ensureTestRestaurant();
+    await createAvailableTable(tableNumber);
 
     // Open table
     await app.handle(
       new Request("http://localhost/tables/opentable", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ number: tableNumber }),
       }),
     );
@@ -264,7 +279,7 @@ describe("API Integration - Table and Order Flow", () => {
     const response = await app.handle(
       new Request("http://localhost/tables/opentable", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ number: tableNumber }),
       }),
     );
@@ -274,12 +289,13 @@ describe("API Integration - Table and Order Flow", () => {
 });
 
 describe("API Integration - Menu and Admin Flow", () => {
-  test("should allow menu retrieval without authentication", async () => {
+  test("should retrieve tenant menu with authentication", async () => {
     const app = createFullApp();
 
     const response = await app.handle(
       new Request("http://localhost/menu/get", {
         method: "GET",
+        headers: authHeaders(),
       }),
     );
 
@@ -294,6 +310,7 @@ describe("API Integration - Menu and Admin Flow", () => {
     const response = await app.handle(
       new Request("http://localhost/admin/getuser", {
         method: "GET",
+        headers: authHeaders(),
       }),
     );
 
@@ -342,7 +359,7 @@ describe("API Integration - Error Handling", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          username: "nonexistent",
+          email: "nonexistent@example.com",
           password: "wrong",
         }),
       }),
@@ -374,6 +391,8 @@ describe("API Integration - JWT Token Validation", () => {
   test("should validate JWT token structure", async () => {
     const app = createFullApp();
     const username = `jwt_test_${Date.now()}`;
+    const slug = `jwt-test-${Date.now()}`;
+    await ensureTestRestaurant(72, { slug });
 
     // Create and signin user
     await app.handle(
@@ -385,15 +404,17 @@ describe("API Integration - JWT Token Validation", () => {
           email: `${username}@example.com`,
           password: "password123",
           role: "user",
+          restaurant_slug: slug,
         }),
       }),
     );
 
     const signinResponse = await app.handle(
-      new Request("http://localhost/auth/signin", {
+      new Request("http://localhost/auth/staff-signin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          slug,
           username,
           password: "password123",
         }),

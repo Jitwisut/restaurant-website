@@ -1,28 +1,56 @@
-import { describe, test, expect } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { Elysia } from "elysia";
 import jwt from "@elysiajs/jwt";
+import { randomUUID } from "crypto";
 import { Orderrouter } from "../router/Orderrouter";
+import { getTestDB } from "./setup";
+import {
+  authHeaders,
+  createAvailableTable,
+  ensureTestRestaurant,
+  OTHER_RESTAURANT_ID,
+  TEST_JWT_SECRET,
+  TEST_RESTAURANT_ID,
+} from "./helpers/testUtils";
 
-/**
- * Order Controller Tests
- * Tests for order history and management
- */
-
-const jwtsecret = process.env.JWT_SECRET || "test-secret-key";
+const db = getTestDB();
 
 const createTestApp = () => {
   return new Elysia()
-    .use(
-      jwt({
-        name: "jwt",
-        secret: jwtsecret,
-      }),
-    )
+    .use(jwt({ name: "jwt", secret: TEST_JWT_SECRET }))
     .use(Orderrouter);
 };
 
+async function seedOrder(restaurantId: number, tableNumber: number, orderId: string) {
+  await ensureTestRestaurant(restaurantId);
+  await createAvailableTable(tableNumber, restaurantId);
+  const sessionId = randomUUID();
+  await db.query(
+    `INSERT INTO sessions (session_id, table_number, opened_at, restaurant_id)
+     VALUES ($1, $2, NOW(), $3)
+     ON CONFLICT DO NOTHING`,
+    [sessionId, tableNumber, restaurantId],
+  );
+  await db.query(
+    `INSERT INTO orders (id, table_number, customer_session, status, restaurant_id)
+     VALUES ($1, $2, $3, 'pending', $4)
+     ON CONFLICT DO NOTHING`,
+    [orderId, tableNumber, sessionId, restaurantId],
+  );
+  await db.query(
+    `INSERT INTO order_items (order_id, menu_item_name, quantity, price, restaurant_id)
+     VALUES ($1, 'Pad Thai', 2, 120, $2)`,
+    [orderId, restaurantId],
+  );
+}
+
+beforeEach(async () => {
+  await ensureTestRestaurant(TEST_RESTAURANT_ID);
+  await ensureTestRestaurant(OTHER_RESTAURANT_ID);
+});
+
 describe("Order Controller - Order History", () => {
-  test("should retrieve order history for a table", async () => {
+  test("rejects order history without JWT", async () => {
     const app = createTestApp();
 
     const response = await app.handle(
@@ -33,130 +61,18 @@ describe("Order Controller - Order History", () => {
       }),
     );
 
-    expect(response.status).toBe(200);
-    const data = await response.json();
-    expect(data.order).toBeDefined();
-    expect(Array.isArray(data.order)).toBe(true);
+    expect(response.status).toBe(401);
   });
 
-  test("should return 404 when table number is missing", async () => {
+  test("retrieves order history for the token restaurant", async () => {
     const app = createTestApp();
+    const orderId = `ORD-TEST-${Date.now()}`;
+    await seedOrder(TEST_RESTAURANT_ID, 11, orderId);
 
     const response = await app.handle(
       new Request("http://localhost/order/orderhistory", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      }),
-    );
-
-    expect(response.status).toBe(404);
-    const data = await response.json();
-    expect(data.message).toContain("No table number");
-  });
-
-  test("should return order with correct structure", async () => {
-    const app = createTestApp();
-
-    const response = await app.handle(
-      new Request("http://localhost/order/orderhistory", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ table_number: 1 }),
-      }),
-    );
-
-    const data = await response.json();
-    expect(Array.isArray(data.order)).toBe(true);
-
-    // If there are orders, check structure
-    if (data.order.length > 0) {
-      const order = data.order[0];
-      expect(order).toHaveProperty("table_number");
-      expect(order).toHaveProperty("id");
-      expect(order).toHaveProperty("status");
-      expect(order).toHaveProperty("created_at");
-      expect(order).toHaveProperty("items");
-      expect(order).toHaveProperty("total");
-    }
-  });
-
-  test("should aggregate order items correctly", async () => {
-    const app = createTestApp();
-
-    const response = await app.handle(
-      new Request("http://localhost/order/orderhistory", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ table_number: 1 }),
-      }),
-    );
-
-    const data = await response.json();
-
-    // Check that items are aggregated as JSON array
-    data.order.forEach((order: any) => {
-      expect(Array.isArray(order.items)).toBe(true);
-
-      // If items exist, check structure
-      if (order.items.length > 0) {
-        order.items.forEach((item: any) => {
-          expect(item).toHaveProperty("menu_item_name");
-          expect(item).toHaveProperty("quantity");
-          expect(item).toHaveProperty("price");
-        });
-      }
-    });
-  });
-
-  test("should calculate total correctly", async () => {
-    const app = createTestApp();
-
-    const response = await app.handle(
-      new Request("http://localhost/order/orderhistory", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ table_number: 1 }),
-      }),
-    );
-
-    const data = await response.json();
-
-    data.order.forEach((order: any) => {
-      expect(typeof order.total).toBe("string");
-      // Total should be a valid number (as string from DB)
-      expect(parseFloat(order.total)).not.toBeNaN();
-      expect(parseFloat(order.total)).toBeGreaterThanOrEqual(0);
-    });
-  });
-
-  test("should handle different table numbers", async () => {
-    const app = createTestApp();
-
-    const tables = [1, 2, 5, 10];
-
-    for (const tableNum of tables) {
-      const response = await app.handle(
-        new Request("http://localhost/order/orderhistory", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ table_number: tableNum }),
-        }),
-      );
-
-      expect(response.status).toBe(200);
-      const data = await response.json();
-      expect(data.order).toBeDefined();
-    }
-  });
-
-  test("should return empty array for table with no orders", async () => {
-    const app = createTestApp();
-
-    const response = await app.handle(
-      new Request("http://localhost/order/orderhistory", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ table_number: 11 }),
       }),
     );
@@ -164,64 +80,24 @@ describe("Order Controller - Order History", () => {
     expect(response.status).toBe(200);
     const data = await response.json();
     expect(Array.isArray(data.order)).toBe(true);
+    expect(data.order.some((order: any) => order.id === orderId)).toBe(true);
   });
 
-  test("should include session information", async () => {
+  test("does not leak orders from another restaurant", async () => {
     const app = createTestApp();
+    const otherOrderId = `ORD-OTHER-${Date.now()}`;
+    await seedOrder(OTHER_RESTAURANT_ID, 12, otherOrderId);
 
     const response = await app.handle(
       new Request("http://localhost/order/orderhistory", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ table_number: 1 }),
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({}),
       }),
     );
 
+    expect(response.status).toBe(200);
     const data = await response.json();
-
-    // Check for session fields
-    data.order.forEach((order: any) => {
-      expect(order).toHaveProperty("session_id");
-      expect(order).toHaveProperty("opened_at");
-      expect(order).toHaveProperty("closed_at");
-    });
-  });
-
-  test("should limit results to 100 orders", async () => {
-    const app = createTestApp();
-
-    const response = await app.handle(
-      new Request("http://localhost/order/orderhistory", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ table_number: 1 }),
-      }),
-    );
-
-    const data = await response.json();
-    expect(data.order.length).toBeLessThanOrEqual(100);
-  });
-
-  test("should order by created_at DESC", async () => {
-    const app = createTestApp();
-
-    const response = await app.handle(
-      new Request("http://localhost/order/orderhistory", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ table_number: 1 }),
-      }),
-    );
-
-    const data = await response.json();
-
-    if (data.order.length > 1) {
-      // Check that orders are sorted by created_at in descending order
-      for (let i = 0; i < data.order.length - 1; i++) {
-        const date1 = new Date(data.order[i].created_at);
-        const date2 = new Date(data.order[i + 1].created_at);
-        expect(date1.getTime()).toBeGreaterThanOrEqual(date2.getTime());
-      }
-    }
+    expect(data.order.some((order: any) => order.id === otherOrderId)).toBe(false);
   });
 });

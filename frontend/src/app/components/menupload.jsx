@@ -1,5 +1,6 @@
 "use client";
 import React from "react";
+import { createPortal } from "react-dom";
 import {
     Upload,
     X,
@@ -40,11 +41,18 @@ export default function MenuUploadModal({
 }) {
     if (!isOpen) return null;
 
-    return (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+    const modal = (
+        <div className="app-modal-overlay bg-black/50 backdrop-blur-sm">
             <div
                 ref={modalRef}
-                className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl animate-in fade-in-0 zoom-in-95 duration-200"
+                className="app-modal-card bg-white rounded-2xl shadow-2xl animate-in fade-in-0 zoom-in-95 duration-200"
+                style={{
+                    "--app-modal-width": "672px",
+                    width: "min(672px, calc(100vw - 48px))",
+                    maxWidth: "calc(100vw - 48px)",
+                    minWidth: "min(360px, calc(100vw - 48px))",
+                    maxHeight: "calc(100vh - 48px)",
+                }}
             >
                 {/* Header */}
                 <div className="flex justify-between items-center p-6 border-b border-slate-200 sticky top-0 bg-white rounded-t-2xl">
@@ -199,7 +207,7 @@ export default function MenuUploadModal({
                                 <div className="mt-4">
                                     <img
                                         src={imagePreview}
-                                        alt="ตัวอย่างรูปภาพ"
+                                        alt="Preview"
                                         className="max-w-full h-40 object-cover rounded-xl shadow-md mx-auto"
                                     />
                                 </div>
@@ -257,4 +265,7 @@ export default function MenuUploadModal({
             </div>
         </div>
     );
+
+    if (typeof document === "undefined") return null;
+    return createPortal(modal, document.body);
 }

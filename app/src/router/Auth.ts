@@ -9,10 +9,17 @@ export const Auths = (app: Elysia) => {
       .post("/signin", Authcontroller.signin, {
         body: t.Optional(
           t.Object({
-            username: t.String(),
+            email: t.String(),
             password: t.String(),
           }),
         ),
+      })
+      .post("/staff-signin", Authcontroller.staffSignin, {
+        body: t.Object({
+          slug: t.String(),
+          username: t.String(),
+          password: t.String(),
+        }),
       })
       .post("/signup", Authcontroller.signup, {
         body: t.Object({
@@ -23,9 +30,15 @@ export const Auths = (app: Elysia) => {
             t.Literal("admin"),
             t.Literal("user"),
             t.Literal("kitchen"),
+            t.Literal("owner"),
+            t.Literal("staff"),
+            t.Literal("superadmin"),
           ]),
+          restaurant_name: t.Optional(t.String()),
+          restaurant_slug: t.Optional(t.String()),
         }),
-      });
+      })
+      .post("/test", Authcontroller.test);
     return app;
   });
 };

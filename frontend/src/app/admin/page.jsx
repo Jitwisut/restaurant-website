@@ -1,1337 +1,1080 @@
 "use client";
-import React, { useState, useEffect, useRef, useCallback } from "react";
-import { useRouter } from "next/navigation";
+
+import Link from "next/link";
 import Swal from "sweetalert2";
-import {
-  Search,
-  Edit2,
-  Trash2,
-  UserPlus,
-  Users,
-  Shield,
-  ChefHat,
-  Eye,
-  EyeOff,
-  Upload,
-  X,
-  Plus,
-  Image,
-  DollarSign,
-  FileText,
-  Tag,
-  Filter,
-  Download,
-  Settings,
-  TrendingUp,
-  Activity,
-  Loader2,
-  AlertCircle,
-  CheckCircle,
-  Menu,
-  ChevronDown,
-  MoreVertical,
-  RefreshCw,
-} from "lucide-react";
-import axios from "axios";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import MenuUpload from "../components/menupload";
+import { buildRestaurantPath } from "@/lib/auth";
+import { buildWsUrl, createApiClient } from "@/lib/api";
+import { useAuth } from "../components/AuthProvider";
+import { useRestaurantAccess } from "../components/useRestaurantAccess";
 
-// Loading Spinner Component
-const LoadingSpinner = ({ size = "md", className = "" }) => {
-  const sizeClasses = {
-    sm: "w-4 h-4",
-    md: "w-6 h-6",
-    lg: "w-8 h-8",
-  };
+export default function RestaurantDashboard() {
+  const { signOut } = useAuth();
+  const { auth, ready, allowed } = useRestaurantAccess([
+    "owner",
+    "admin",
+    "superadmin",
+  ]);
+  const api = useMemo(() => createApiClient(auth?.token), [auth?.token]);
 
-  return (
-    <Loader2 className={`${sizeClasses[size]} animate-spin ${className}`} />
-  );
-};
-
-// Form Input with Error Handling
-const FormInput = ({
-  label,
-  error,
-  required = false,
-  icon: Icon,
-  loading = false,
-  ...props
-}) => (
-  <div className="space-y-2">
-    <label className="flex items-center text-sm font-medium text-slate-700 gap-2">
-      {Icon && <Icon className="w-4 h-4" />}
-      {label}
-      {required && <span className="text-red-500">*</span>}
-    </label>
-    <div className="relative">
-      <input
-        {...props}
-        disabled={loading || props.disabled}
-        className={`w-full border p-3 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 bg-slate-50 hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed ${
-          error ? "border-red-300 bg-red-50" : "border-slate-200"
-        } ${props.className || ""}`}
-        aria-invalid={error ? "true" : "false"}
-        aria-describedby={error ? `${props.id}-error` : undefined}
-      />
-      {loading && (
-        <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
-          <LoadingSpinner size="sm" />
-        </div>
-      )}
-    </div>
-    {error && (
-      <p
-        id={`${props.id}-error`}
-        className="text-sm text-red-600 flex items-center gap-1"
-      >
-        <AlertCircle className="w-4 h-4" />
-        {error}
-      </p>
-    )}
-  </div>
-);
-
-// Enhanced Confirmation Modal
-const ConfirmationModal = ({
-  isOpen,
-  onClose,
-  onConfirm,
-  title,
-  message,
-  confirmText = "ยืนยัน",
-  cancelText = "ยกเลิก",
-  type = "danger",
-  loading = false,
-}) => {
-  if (!isOpen) return null;
-
-  const typeStyles = {
-    danger: "from-red-600 to-red-700",
-    warning: "from-yellow-600 to-yellow-700",
-    success: "from-green-600 to-green-700",
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl animate-in fade-in-0 zoom-in-95 duration-200">
-        <div className="p-6 space-y-4">
-          <h3 className="text-lg font-semibold text-slate-900">{title}</h3>
-          <p className="text-slate-600">{message}</p>
-          <div className="flex gap-3 pt-4">
-            <button
-              onClick={onClose}
-              disabled={loading}
-              className="flex-1 px-4 py-2 border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors disabled:opacity-50"
-            >
-              {cancelText}
-            </button>
-            <button
-              onClick={onConfirm}
-              disabled={loading}
-              className={`flex-1 bg-gradient-to-r ${typeStyles[type]} text-white px-4 py-2 rounded-xl hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center justify-center gap-2`}
-            >
-              {loading && <LoadingSpinner size="sm" />}
-              {confirmText}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// Debounced Search Hook
-const useDebounce = (value, delay) => {
-  const [debouncedValue, setDebouncedValue] = useState(value);
-
-  useEffect(() => {
-    const handler = setTimeout(() => {
-      setDebouncedValue(value);
-    }, delay);
-
-    return () => {
-      clearTimeout(handler);
-    };
-  }, [value, delay]);
-
-  return debouncedValue;
-};
-
-// Enhanced StatCard with Loading State
-const StatCard = ({
-  label,
-  value,
-  color = "slate",
-  icon,
-  trend,
-  loading = false,
-}) => {
-  const colorClasses = {
-    slate:
-      "from-slate-600 to-slate-700 bg-slate-50 border-slate-200 text-slate-700",
-    emerald:
-      "from-emerald-600 to-emerald-700 bg-emerald-50 border-emerald-200 text-emerald-700",
-    red: "from-red-600 to-red-700 bg-red-50 border-red-200 text-red-700",
-    orange:
-      "from-orange-600 to-orange-700 bg-orange-50 border-orange-200 text-orange-700",
-    blue: "from-blue-600 to-blue-700 bg-blue-50 border-blue-200 text-blue-700",
-  };
-
-  return (
-    <div
-      className={`bg-white border rounded-2xl p-4 lg:p-6 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105 backdrop-blur-sm ${colorClasses[
-        color
-      ]
-        .split(" ")
-        .slice(2)
-        .join(" ")}`}
-    >
-      <div className="flex items-center justify-between mb-3">
-        <div
-          className={`p-2 rounded-xl bg-gradient-to-r ${colorClasses[color]
-            .split(" ")
-            .slice(0, 2)
-            .join(" ")} text-white`}
-        >
-          {icon}
-        </div>
-        {trend && (
-          <div className="flex items-center gap-1 text-xs font-medium text-emerald-600">
-            <TrendingUp className="w-3 h-3" />
-            {trend}
-          </div>
-        )}
-      </div>
-      <div className="space-y-1">
-        <div
-          className={`text-2xl lg:text-3xl font-bold ${
-            colorClasses[color].split(" ")[4]
-          }`}
-        >
-          {loading ? <LoadingSpinner size="sm" /> : value ?? 0}
-        </div>
-        <div className="text-xs lg:text-sm text-slate-500 font-medium">
-          {label}
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const AdminUserManagement = () => {
-  const router = useRouter();
-  const modalRef = useRef(null);
-
-  // Data States
+  const wsRef = useRef(null);
+  const [connected, setConnected] = useState(false);
+  const [tables, setTables] = useState([]);
   const [users, setUsers] = useState([]);
-  const [role, setRole] = useState({});
-  const [total, setTotal] = useState(0);
-
-  // UI States
-  const [showCreateForm, setShowCreateForm] = useState(false);
-  const [editingUser, setEditingUser] = useState(null);
-  const [showMenuUpload, setShowMenuUpload] = useState(false);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-
-  // Loading States
-  const [loading, setLoading] = useState(true);
+  const [userCount, setUserCount] = useState(0);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [pendingRestaurants, setPendingRestaurants] = useState([]);
+  const [restaurantsLoading, setRestaurantsLoading] = useState(false);
+  const [restaurantActionId, setRestaurantActionId] = useState(null);
+  const [showMenu, setShowMenu] = useState(false);
+  const [showUserModal, setShowUserModal] = useState(false);
+  const [imagePreview, setImagePreview] = useState(null);
   const [submitLoading, setSubmitLoading] = useState(false);
-  const [statsLoading, setStatsLoading] = useState(true);
-
-  // Form States
-  const [username, setUsername] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [userRole, setUserRole] = useState("user");
-  const [originuser, setOriginuser] = useState("");
-  const [errors, setErrors] = useState({});
-
-  // Search & Filter States
-  const [searchTerm, setSearchTerm] = useState("");
-  const [filterRole, setFilterRole] = useState("all");
-  const [filterStatus, setFilterStatus] = useState("all");
-
-  // Debounced search
-  const debouncedSearchTerm = useDebounce(searchTerm, 300);
-
-  const [isAuthChecking, setIsAuthChecking] = useState(true);
-  const [isAuthorized, setIsAuthorized] = useState(false);
-
-  // Menu Upload States
+  const [userSubmitting, setUserSubmitting] = useState(false);
+  const [editingUser, setEditingUser] = useState(null);
   const [menuData, setMenuData] = useState({
     name: "",
-    description: "",
     price: "",
-    image: "",
+    description: "",
     category: "",
     ingredients: "",
     isAvailable: true,
   });
-  const [imagePreview, setImagePreview] = useState(null);
-
-  // Confirmation Modal States
-  const [confirmModal, setConfirmModal] = useState({
-    isOpen: false,
-    title: "",
-    message: "",
-    onConfirm: () => {},
-    type: "danger",
+  const [userForm, setUserForm] = useState({
+    username: "",
+    email: "",
+    password: "",
+    role: "staff",
   });
 
-  const baseurl = process.env.NEXT_PUBLIC_BACKEND_URL;
+  const reservedTables = tables.filter((item) => item.status === "open").length;
 
-  // Form Validation
-  const validateForm = useCallback(() => {
-    const newErrors = {};
-
-    if (!username.trim()) {
-      newErrors.username = "กรุณากรอก Username";
-    } else if (username.length < 3) {
-      newErrors.username = "Username ต้องมีอย่างน้อย 3 ตัวอักษร";
-    }
-
-    if (!email.trim()) {
-      newErrors.email = "กรุณากรอก Email";
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      newErrors.email = "รูปแบบ Email ไม่ถูกต้อง";
-    }
-
-    if (!editingUser && !password.trim()) {
-      newErrors.password = "กรุณากรอก Password";
-    } else if (!editingUser && password.length < 6) {
-      newErrors.password = "Password ต้องมีอย่างน้อย 6 ตัวอักษร";
-    }
-
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  }, [username, email, password, editingUser]);
-
-  // Auth Check
+  // Keep the page behind dialogs from scrolling.
   useEffect(() => {
-    const admin = async () => {
-      const token = sessionStorage.getItem("auth");
-      if (!token) {
-        router.replace("/");
-        return;
-      }
+    const isAnyModalOpen = showUserModal || showMenu;
+    if (isAnyModalOpen) {
+      document.body.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = "";
+    }
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [showUserModal, showMenu]);
+
+  const resetUserForm = () => {
+    setEditingUser(null);
+    setUserForm({
+      username: "",
+      email: "",
+      password: "",
+      role: "staff",
+    });
+    setShowUserModal(false);
+  };
+
+  const loadUsers = async () => {
+    setUsersLoading(true);
+    try {
+      const response = await api.get("/admin/getuser");
+      setUsers(response.data.user || []);
+      setUserCount(response.data.count || 0);
+    } catch (error) {
+      Swal.fire({
+        icon: "error",
+        title: "Load users failed",
+        text: error.normalizedMessage || "Unable to fetch users",
+      });
+    } finally {
+      setUsersLoading(false);
+    }
+  };
+
+  const loadPendingRestaurants = async () => {
+    if (auth?.role !== "superadmin") return;
+
+    setRestaurantsLoading(true);
+    try {
+      const response = await api.get("/restaurant/pending");
+      setPendingRestaurants(response.data.restaurants || []);
+    } catch (error) {
+      Swal.fire({
+        icon: "error",
+        title: "Load restaurants failed",
+        text: error.normalizedMessage || "Unable to fetch pending restaurants",
+      });
+    } finally {
+      setRestaurantsLoading(false);
+    }
+  };
+
+  const updateRestaurantStatus = async (restaurantId, action) => {
+    setRestaurantActionId(`${action}:${restaurantId}`);
+    try {
+      await api.post(`/restaurant/${restaurantId}/${action}`);
+      Swal.fire({
+        icon: "success",
+        title:
+          action === "approve" ? "Restaurant approved" : "Restaurant updated",
+        timer: 1300,
+        showConfirmButton: false,
+      });
+      await loadPendingRestaurants();
+    } catch (error) {
+      Swal.fire({
+        icon: "error",
+        title: "Update failed",
+        text: error.normalizedMessage || "Unable to update restaurant status",
+      });
+    } finally {
+      setRestaurantActionId(null);
+    }
+  };
+
+  useEffect(() => {
+    if (!ready || !allowed || !auth?.username || !auth?.token) return;
+
+    const socket = new WebSocket(
+      buildWsUrl(
+        `/ws/${encodeURIComponent(auth.username)}?role=admin`,
+        auth.token,
+      ),
+    );
+    wsRef.current = socket;
+
+    socket.onopen = () => setConnected(true);
+    socket.onclose = () => setConnected(false);
+    socket.onmessage = (event) => {
       try {
-        const res = await axios.get(`${baseurl}/middleware/admin`, {
-          headers: { Authorization: `Bearer ${token}` },
-          withCredentials: true,
-        });
-        if (res.status === 200) {
-          setIsAuthorized(true);
-          await fetchUser();
+        const data = JSON.parse(event.data);
+        if (data.type === "call_staff") {
+          Swal.fire({
+            title: `โต๊ะ ${data.table_number} เรียกพนักงาน`,
+            text: `เวลา ${new Date(data.timestamp).toLocaleTimeString("th-TH")}`,
+            icon: "info",
+            confirmButtonText: "รับทราบ",
+          });
         }
-      } catch (error) {
-        if (error.response?.status === 401) {
-          console.log("ยังไม่ได้ login");
-          router.replace("/");
-        } else if (error.response?.status === 403) {
-          console.log("ไม่ใช่ admin");
-          router.replace("/");
-        } else {
-          console.log("เกิดข้อผิดพลาดอื่น:", error);
-        }
-      } finally {
-        setIsAuthChecking(false);
+      } catch {
+        // ignore malformed notifications
       }
     };
 
-    admin();
-  }, [router]);
+    return () => socket.close();
+  }, [allowed, auth?.token, auth?.username, ready]);
 
-  // Fetch Users Data
-  const fetchUser = async () => {
-    try {
-      setLoading(true);
-      setStatsLoading(true);
+  useEffect(() => {
+    if (!ready || !allowed || !auth?.token) return;
 
-      const res = await axios.get(`${baseurl}/admin/getuser`, {
-        withCredentials: true,
-      });
-
-      if (res.status === 200) {
-        setUsers(res.data.user);
-        setTotal(res.data.count);
-        setRole(res.data.roles);
-      }
-    } catch (error) {
-      console.error("Fetch error:", error);
-      Swal.fire({
-        icon: "error",
-        title: "เกิดข้อผิดพลาด",
-        text: "ไม่สามารถดึงข้อมูลผู้ใช้ได้",
-      });
-    } finally {
-      setLoading(false);
-      setStatsLoading(false);
-    }
-  };
-
-  // Form Submission with Loading
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-
-    if (!validateForm()) return;
-
-    setSubmitLoading(true);
-    try {
-      const res = await axios.post(
-        `${baseurl}/admin/createuser`,
-        {
-          username,
-          password,
-          email,
-          role: userRole,
-        },
-        { withCredentials: true }
-      );
-
-      if (res.status === 201) {
-        Swal.fire({
-          icon: "success",
-          title: "สมัครสมาชิกสำเร็จ",
-          text: "คุณสามารถเข้าสู่ระบบได้เลย!",
-          timer: 2000,
-          showConfirmButton: false,
-        });
-
-        await fetchUser();
-        resetForm();
-      }
-    } catch (error) {
-      console.error(error);
-      Swal.fire({
-        icon: "error",
-        title: "เกิดข้อผิดพลาด",
-        text: error.response?.data?.message || "ไม่สามารถสร้างผู้ใช้ได้",
-      });
-    } finally {
-      setSubmitLoading(false);
-    }
-  };
-
-  // Reset Form
-  const resetForm = () => {
-    setUsername("");
-    setEmail("");
-    setPassword("");
-    setUserRole("user");
-    setErrors({});
-    setShowCreateForm(false);
-  };
-
-  // Update User
-  const updateUser = async () => {
-    if (!validateForm()) return;
-
-    setSubmitLoading(true);
-    try {
-      const res = await axios.post(
-        `${baseurl}/admin/updateuser`,
-        {
-          username,
-          email,
-          role: userRole,
-          originuser,
-        },
-        { withCredentials: true }
-      );
-
-      if (res.status === 200) {
-        Swal.fire({
-          icon: "success",
-          title: "แก้ไขสำเร็จ",
-          timer: 2000,
-          showConfirmButton: false,
-        });
-
-        await fetchUser();
-        cancelEdit();
-      }
-    } catch (error) {
-      console.error("Update error:", error);
-      Swal.fire({
-        icon: "error",
-        title: "เกิดข้อผิดพลาด",
-        text: "ไม่สามารถแก้ไขข้อมูลได้",
-      });
-    } finally {
-      setSubmitLoading(false);
-    }
-  };
-
-  // Delete User with Confirmation
-  const handleDeleteUser = (username) => {
-    setConfirmModal({
-      isOpen: true,
-      title: "ยืนยันการลบผู้ใช้",
-      message: `คุณแน่ใจหรือไม่ที่จะลบผู้ใช้ "${username}" ออกจากระบบ?`,
-      onConfirm: () => performDeleteUser(username),
-      type: "danger",
-    });
-  };
-
-  const performDeleteUser = async (username) => {
-    try {
-      const res = await axios.post(`${baseurl}/admin/deleteuser`, {
-        username: username,
-      });
-
-      if (res.status === 201) {
-        Swal.fire({
-          icon: "success",
-          title: "ลบข้อมูลผู้ใช้เรียบร้อย",
-          text: "ผู้ใช้ถูกลบออกจากระบบแล้ว",
-          timer: 2000,
-          showConfirmButton: false,
-        });
-        await fetchUser();
-      }
-    } catch (error) {
-      Swal.fire({
-        icon: "error",
-        title: "เกิดข้อผิดพลาด",
-        text: "ไม่สามารถลบผู้ใช้ได้",
-      });
-    } finally {
-      setConfirmModal({ ...confirmModal, isOpen: false });
-    }
-  };
-
-  // Edit User
-  const startEdit = (user) => {
-    setEditingUser(user);
-    setUsername(user.username);
-    setEmail(user.email);
-    setUserRole(user.role);
-    setOriginuser(user.username);
-    setErrors({});
-  };
-
-  const cancelEdit = () => {
-    setEditingUser(null);
-    resetForm();
-  };
-
-  // Toggle User Status
-  const toggleUserStatus = (userId) => {
-    setUsers(
-      users.map((user) =>
-        user.id === userId
-          ? {
-              ...user,
-              status: user.status === "active" ? "inactive" : "active",
-            }
-          : user
-      )
-    );
-  };
-
-  // Menu Upload Functions
-  const handleImageChange = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      if (file.size > 5 * 1024 * 1024) {
-        // 5MB limit
+    const loadTables = async () => {
+      try {
+        const response = await api.get("/tables/gettable");
+        setTables(response.data.tables || []);
+      } catch (error) {
         Swal.fire({
           icon: "error",
-          title: "ไฟล์ใหญ่เกินไป",
-          text: "กรุณาเลือกไฟล์ที่มีขนาดไม่เกิน 5MB",
+          title: "โหลดข้อมูลไม่สำเร็จ",
+          text: error.normalizedMessage || "ไม่สามารถดึงข้อมูลโต๊ะได้",
         });
-        return;
       }
+    };
 
-      setMenuData({ ...menuData, image: file });
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setImagePreview(reader.result);
-      };
-      reader.readAsDataURL(file);
+    loadTables();
+  }, [allowed, api, auth?.token, ready]);
+
+  useEffect(() => {
+    if (!ready || !allowed || !auth?.token) return;
+    loadUsers();
+  }, [allowed, api, auth?.token, ready]);
+
+  useEffect(() => {
+    if (!ready || !allowed || auth?.role !== "superadmin" || !auth?.token) {
+      return;
     }
-  };
+    loadPendingRestaurants();
+  }, [allowed, api, auth?.role, auth?.token, ready]);
 
-  // Menu Form Submission
-  const handleMenuSubmit = async (e) => {
-    e.preventDefault();
-    setSubmitLoading(true);
+  const handleImageChange = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
 
-    try {
-      const res = await axios.post(`${baseurl}/admin/upload-menu`, menuData, {
-        withCredentials: true,
-        headers: { "Content-Type": "multipart/form-data" },
-      });
-
-      if (res.status === 200) {
-        Swal.fire({
-          icon: "success",
-          title: "อัพโหลดเมนูสำเร็จ",
-          text: "เมนูใหม่ถูกเพิ่มเข้าระบบแล้ว",
-          timer: 2000,
-          showConfirmButton: false,
-        });
-        resetMenuForm();
-      }
-    } catch (error) {
-      console.error("Upload error:", error);
-      Swal.fire({
-        icon: "error",
-        title: "เกิดข้อผิดพลาด",
-        text: "ไม่สามารถอัพโหลดเมนูได้ กรุณาลองใหม่อีกครั้ง",
-      });
-    } finally {
-      setSubmitLoading(false);
-    }
+    const reader = new FileReader();
+    reader.onloadend = () => setImagePreview(reader.result);
+    reader.readAsDataURL(file);
   };
 
   const resetMenuForm = () => {
+    setShowMenu(false);
     setMenuData({
       name: "",
-      description: "",
       price: "",
+      description: "",
       category: "",
       ingredients: "",
-      image: null,
       isAvailable: true,
     });
     setImagePreview(null);
-    setShowMenuUpload(false);
   };
 
-  // Auto-close modal on outside click
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (modalRef.current && !modalRef.current.contains(event.target)) {
-        if (showMenuUpload && !submitLoading) {
-          resetMenuForm();
-        }
+  const closeOpenModals = () => {
+    setShowUserModal(false);
+    setShowMenu(false);
+  };
+
+  const showAlertReplacingModal = async (options) => {
+    closeOpenModals();
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    return Swal.fire(options);
+  };
+
+  const handleMenuSubmit = async (event) => {
+    event.preventDefault();
+    setSubmitLoading(true);
+
+    try {
+      const formData = new FormData();
+      formData.append("name", menuData.name);
+      formData.append("description", menuData.description);
+      formData.append("price", menuData.price);
+      formData.append("category", menuData.category);
+      formData.append("ingredients", menuData.ingredients || "");
+      formData.append("isAvailable", String(menuData.isAvailable));
+
+      const imageInput = document.querySelector('input[type="file"]');
+      if (imageInput?.files?.[0]) {
+        formData.append("image", imageInput.files[0]);
       }
-    };
 
-    if (showMenuUpload) {
-      document.addEventListener("mousedown", handleClickOutside);
-      return () =>
-        document.removeEventListener("mousedown", handleClickOutside);
-    }
-  }, [showMenuUpload, submitLoading]);
+      await api.post("/admin/upload-menu", formData, {
+        headers: {
+          "Content-Type": "multipart/form-data",
+        },
+      });
 
-  // Filter Users
-  const filteredUsers = users.filter((user) => {
-    const matchSearch =
-      user.username.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
-      user.email.toLowerCase().includes(debouncedSearchTerm.toLowerCase());
-    const matchRole = filterRole === "all" || user.role === filterRole;
-    const matchStatus = filterStatus === "all" || user.status === filterStatus;
-    return matchSearch && matchRole && matchStatus;
-  });
-
-  // Helper Functions
-  const getRoleIcon = (role) => {
-    switch (role) {
-      case "admin":
-        return <Shield className="w-4 h-4 text-red-500" />;
-      case "kitchen":
-        return <ChefHat className="w-4 h-4 text-orange-500" />;
-      default:
-        return <Users className="w-4 h-4 text-blue-500" />;
+      Swal.fire({
+        icon: "success",
+        title: "อัปโหลดเมนูสำเร็จ",
+        timer: 1800,
+        showConfirmButton: false,
+      });
+      resetMenuForm();
+    } catch (error) {
+      await showAlertReplacingModal({
+        icon: "error",
+        title: "อัปโหลดเมนูไม่สำเร็จ",
+        text: error.normalizedMessage || "กรุณาลองใหม่อีกครั้ง",
+      });
+    } finally {
+      setSubmitLoading(false);
     }
   };
 
-  const getRoleColor = (role) => {
-    switch (role) {
-      case "admin":
-        return "bg-gradient-to-r from-red-100 to-red-200 text-red-800 border border-red-200";
-      case "kitchen":
-        return "bg-gradient-to-r from-orange-100 to-orange-200 text-orange-800 border border-orange-200";
-      default:
-        return "bg-gradient-to-r from-blue-100 to-blue-200 text-blue-800 border border-blue-200";
+  const handleUserSubmit = async (event) => {
+    event.preventDefault();
+    setUserSubmitting(true);
+
+    try {
+      if (editingUser) {
+        await api.post("/admin/updateuser", {
+          originuser: editingUser.username,
+          username: userForm.username,
+          email: userForm.email,
+          role: userForm.role,
+        });
+      } else {
+        await api.post("/admin/createuser", userForm);
+      }
+
+      Swal.fire({
+        icon: "success",
+        title: editingUser ? "User updated" : "User created",
+        timer: 1500,
+        showConfirmButton: false,
+      });
+      resetUserForm();
+      await loadUsers();
+    } catch (error) {
+      await showAlertReplacingModal({
+        icon: "error",
+        title: editingUser ? "Update failed" : "Create failed",
+        text: error.normalizedMessage || "Please try again",
+      });
+    } finally {
+      setUserSubmitting(false);
     }
   };
 
-  const stats = {
-    totals: users.length,
-    admin: users.filter((u) => u.role === "admin").length,
-    kitchen: users.filter((u) => u.role === "kitchen").length,
-    user: users.filter((u) => u.role === "user").length,
-    active: users.filter((u) => u.status === "active").length,
-    inactive: users.filter((u) => u.status === "inactive").length,
+  const startEditUser = (user) => {
+    setEditingUser(user);
+    setUserForm({
+      username: user.username || "",
+      email: user.email || "",
+      password: "",
+      role: user.role || "staff",
+    });
+    setShowUserModal(true);
   };
 
-  // แสดง Loading Screen ขณะตรวจสอบสิทธิ์
-  if (isAuthChecking) {
+  const handleDeleteUser = async (username) => {
+    const result = await Swal.fire({
+      icon: "warning",
+      title: `Delete ${username}?`,
+      text: "This action cannot be undone",
+      showCancelButton: true,
+      confirmButtonText: "Delete",
+      cancelButtonText: "Cancel",
+      confirmButtonColor: "#dc2626",
+    });
+
+    if (!result.isConfirmed) return;
+
+    try {
+      await api.post("/admin/deleteuser", { username });
+      Swal.fire({
+        icon: "success",
+        title: "User deleted",
+        timer: 1200,
+        showConfirmButton: false,
+      });
+      if (editingUser?.username === username) {
+        resetUserForm();
+      }
+      await loadUsers();
+    } catch (error) {
+      Swal.fire({
+        icon: "error",
+        title: "Delete failed",
+        text: error.normalizedMessage || "Please try again",
+      });
+    }
+  };
+
+  if (!ready || (auth?.token && !allowed)) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 flex items-center justify-center">
-        <div className="text-center space-y-4">
-          <LoadingSpinner size="lg" className="mx-auto text-blue-600" />
-          <p className="text-slate-600 font-medium">
-            กำลังตรวจสอบสิทธิ์การเข้าถึง...
-          </p>
-        </div>
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <p className="text-secondary">กำลังโหลดข้อมูลระบบ...</p>
       </div>
     );
   }
-  // ถ้าไม่มีสิทธิ์ ไม่แสดงอะไรเลย (จะถูก redirect อยู่แล้ว)
-  if (!isAuthorized) {
-    return null;
-  }
+
+  // Derived values for the UI
+  const getRoleBadgeClass = (role) => {
+    switch (role) {
+      case "manager":
+      case "admin":
+      case "superadmin":
+      case "owner":
+        return "bg-slate-100 text-slate-700 border-slate-200";
+      case "chef":
+      case "kitchen":
+        return "bg-indigo-50 text-indigo-700 border-indigo-100";
+      case "server":
+      case "staff":
+        return "bg-emerald-50 text-emerald-700 border-emerald-100";
+      default:
+        return "bg-slate-50 text-slate-600 border-slate-200";
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100">
-      <div className="max-w-7xl mx-auto p-4 lg:p-6">
-        {/* Enhanced Header Section */}
-        <div className="mb-6 lg:mb-8">
-          <div className="flex items-center justify-between">
+    <div className="bg-background text-on-surface min-h-screen font-sans">
+      {/* SideNavBar */}
+      <aside className="fixed left-0 top-0 hidden h-screen w-64 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 md:flex flex-col py-6 px-4 gap-2 z-50 transition-all duration-200 ease-in-out">
+        <div className="mb-8 px-2">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-primary-container flex items-center justify-center overflow-hidden font-bold text-on-primary text-xl">
+              {auth?.restaurantSlug?.charAt(0).toUpperCase() || "R"}
+            </div>
             <div>
-              <h1 className="text-2xl lg:text-4xl font-bold bg-gradient-to-r from-slate-800 to-slate-600 bg-clip-text text-transparent">
-                จัดการผู้ใช้งาน
+              <h1 className="text-lg font-black text-indigo-900 dark:text-white leading-tight">
+                RestoAdmin
               </h1>
-              <p className="text-slate-600 mt-2 text-sm lg:text-base">
-                ระบบบริหารจัดการผู้ใช้งานและเมนูอาหาร
+              <p className="text-[10px] uppercase tracking-widest font-bold text-slate-400">
+                Management Suite
               </p>
             </div>
-            <div className="flex items-center gap-2 lg:gap-3">
-              <button
-                onClick={fetchUser}
-                disabled={loading}
-                className="p-2 rounded-xl bg-white shadow-md hover:shadow-lg transition-all duration-200 hover:scale-105 disabled:opacity-50"
-                aria-label="รีเฟรชข้อมูล"
-              >
-                <RefreshCw
-                  className={`w-5 h-5 text-slate-600 ${
-                    loading ? "animate-spin" : ""
-                  }`}
-                />
-              </button>
-              <button className="p-2 rounded-xl bg-white shadow-md hover:shadow-lg transition-all duration-200 hover:scale-105">
-                <Settings className="w-5 h-5 text-slate-600" />
-              </button>
-              <button className="p-2 rounded-xl bg-white shadow-md hover:shadow-lg transition-all duration-200 hover:scale-105">
-                <Download className="w-5 h-5 text-slate-600" />
-              </button>
-              {/* Mobile Menu Toggle */}
-              <button
-                className="lg:hidden p-2 rounded-xl bg-white shadow-md"
-                onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-                aria-label="เมนู"
-              >
-                <Menu className="w-5 h-5 text-slate-600" />
-              </button>
-            </div>
           </div>
         </div>
 
-        {/* Enhanced Statistics Cards - Responsive Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 lg:gap-4 mb-6 lg:mb-8">
-          <StatCard
-            label="ทั้งหมด"
-            value={total}
-            icon={<Users className="w-4 lg:w-6 h-4 lg:h-6" />}
-            color="slate"
-            trend="+12%"
-            loading={statsLoading}
-          />
-          <StatCard
-            label="ใช้งานอยู่"
-            value={stats.active}
-            icon={<Activity className="w-4 lg:w-6 h-4 lg:h-6" />}
-            color="emerald"
-            trend="+8%"
-            loading={statsLoading}
-          />
-          <StatCard
-            label="ไม่ใช้งาน"
-            value={stats.inactive}
-            icon={<EyeOff className="w-4 lg:w-6 h-4 lg:h-6" />}
-            color="slate"
-            trend="-2%"
-            loading={statsLoading}
-          />
-          <StatCard
-            label="Admin"
-            value={role.admin}
-            icon={<Shield className="w-4 lg:w-6 h-4 lg:h-6" />}
-            color="red"
-            loading={statsLoading}
-          />
-          <StatCard
-            label="Kitchen"
-            value={role.kitchen}
-            icon={<ChefHat className="w-4 lg:w-6 h-4 lg:h-6" />}
-            color="orange"
-            loading={statsLoading}
-          />
-          <StatCard
-            label="User"
-            value={role.user}
-            icon={<Users className="w-4 lg:w-6 h-4 lg:h-6" />}
-            color="blue"
-            loading={statsLoading}
-          />
+        <nav className="flex-1 space-y-1">
+          <Link
+            href={buildRestaurantPath(auth, "admin")}
+            className="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-slate-100 dark:bg-indigo-900/20 text-indigo-900 dark:text-indigo-300 border-r-4 border-indigo-900 dark:border-indigo-400 font-semibold transition-all"
+          >
+            <span className="material-symbols-outlined">badge</span>
+            <span className="font-sans text-sm">Staff Management</span>
+          </Link>
+          <Link
+            href={buildRestaurantPath(auth, "orders")}
+            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-600 dark:text-slate-400 hover:text-indigo-800 dark:hover:text-indigo-200 hover:bg-slate-50 dark:hover:bg-slate-900 transition-all"
+          >
+            <span className="material-symbols-outlined">restaurant_menu</span>
+            <span className="font-sans text-sm">Live Orders</span>
+          </Link>
+          <Link
+            href={buildRestaurantPath(auth, "tables")}
+            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-600 dark:text-slate-400 hover:text-indigo-800 dark:hover:text-indigo-200 hover:bg-slate-50 dark:hover:bg-slate-900 transition-all"
+          >
+            <span className="material-symbols-outlined">map</span>
+            <span className="font-sans text-sm">Floor Plan</span>
+          </Link>
+          <Link
+            href={buildRestaurantPath(auth, "kitchen")}
+            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-600 dark:text-slate-400 hover:text-indigo-800 dark:hover:text-indigo-200 hover:bg-slate-50 dark:hover:bg-slate-900 transition-all"
+          >
+            <span className="material-symbols-outlined">kitchen</span>
+            <span className="font-sans text-sm">Kitchen</span>
+          </Link>
+          <Link
+            href={buildRestaurantPath(auth, "profile")}
+            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-600 dark:text-slate-400 hover:text-indigo-800 dark:hover:text-indigo-200 hover:bg-slate-50 dark:hover:bg-slate-900 transition-all"
+          >
+            <span className="material-symbols-outlined">settings</span>
+            <span className="font-sans text-sm">Settings</span>
+          </Link>
+        </nav>
+
+        <button
+          onClick={() => setShowMenu(true)}
+          className="mt-auto bg-primary text-white py-3 px-4 rounded-xl font-semibold flex items-center justify-center gap-2 active:scale-95 duration-150 transition-all shadow-lg shadow-primary/20"
+        >
+          <span className="material-symbols-outlined text-lg">add</span>
+          <span>Add Menu Item</span>
+        </button>
+      </aside>
+
+      {/* TopAppBar */}
+      <header className="fixed top-0 right-0 left-0 md:left-64 h-16 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-4 md:px-8 z-40 shadow-sm transition-colors duration-150">
+        <div className="flex items-center gap-4 flex-1">
+          <div className="relative w-full max-w-md">
+            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-lg">
+              search
+            </span>
+            <input
+              className="w-full bg-surface-container-low border-none rounded-full py-2 pl-10 pr-4 text-sm focus:ring-2 focus:ring-primary-container text-on-surface"
+              placeholder="Search operations..."
+              type="text"
+            />
+          </div>
         </div>
 
-        {/* Enhanced Search & Filter Bar - Mobile Optimized */}
-        <div className="bg-white rounded-2xl shadow-lg border border-slate-200 p-4 lg:p-6 mb-6 backdrop-blur-sm">
-          <div className="flex flex-col gap-4">
-            {/* Search Input - Always Visible */}
-            <div className="relative flex-1">
-              <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 text-slate-400 w-5 h-5" />
+        <div className="flex items-center gap-2 md:gap-4">
+          <span
+            className={`hidden sm:inline-flex px-2 py-0.5 rounded-full items-center text-xs font-semibold border ${
+              connected
+                ? "bg-emerald-100/50 text-emerald-700 border-emerald-200"
+                : "bg-error-container text-on-error-container border-error"
+            }`}
+          >
+            {connected && (
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1 animate-pulse"></span>
+            )}
+            {connected ? "Live" : "Offline"}
+          </span>
+
+          <button className="p-2 rounded-full text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors active:scale-95">
+            <span className="material-symbols-outlined">notifications</span>
+          </button>
+          <button className="p-2 rounded-full text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors active:scale-95">
+            <span className="material-symbols-outlined">help_outline</span>
+          </button>
+          <div className="hidden md:block h-8 w-[1px] bg-slate-200 dark:bg-slate-700 mx-2"></div>
+          <div className="flex items-center gap-2 md:gap-3">
+            <div className="hidden sm:block text-right">
+              <p className="text-xs font-bold text-indigo-950 dark:text-white leading-none capitalize">
+                {auth?.username}
+              </p>
+              <p className="text-[10px] text-slate-500 mt-1 capitalize">
+                {auth?.role} Access
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                signOut();
+                window.location.href = "/signin";
+              }}
+              title="Sign out"
+              className="w-10 h-10 rounded-full border-2 border-primary-fixed overflow-hidden bg-primary text-white flex items-center justify-center"
+            >
+              <span className="material-symbols-outlined">logout</span>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content Area */}
+      <main className="pt-24 px-4 md:px-margin pb-xl min-h-screen md:ml-64">
+        {/* Header Section */}
+        <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-4 md:gap-gutter mb-lg">
+          <div>
+            <h2 className="font-h1 text-h1 text-primary tracking-tight">
+              Staff Management
+            </h2>
+            <p className="font-body-md text-body-md text-secondary mt-1">
+              Manage employee rosters, roles, and shift availability.
+            </p>
+          </div>
+          <div className="flex w-full xl:w-auto flex-col sm:flex-row sm:items-center gap-3">
+            <div className="relative w-full sm:w-auto">
+              <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline">
+                search
+              </span>
               <input
+                className="w-full sm:w-64 bg-surface-container-lowest border-outline-variant rounded-lg py-base pl-10 pr-md text-body-sm focus:border-primary focus:ring-0 transition-all"
+                placeholder="Search employees..."
                 type="text"
-                className="w-full pl-12 pr-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 bg-slate-50 hover:bg-white"
-                placeholder="ค้นหา username หรือ email..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                aria-label="ค้นหาผู้ใช้"
               />
             </div>
-
-            {/* Filters and Actions - Responsive Layout */}
-            <div className="flex flex-col sm:flex-row gap-3">
-              {/* Filters */}
-              <div className="flex gap-3 flex-1">
-                <div className="relative flex-1 sm:flex-none">
-                  <Filter className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 w-4 h-4" />
-                  <select
-                    value={filterRole}
-                    onChange={(e) => setFilterRole(e.target.value)}
-                    className="w-full pl-10 pr-8 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 bg-slate-50 hover:bg-white transition-all duration-200 appearance-none"
-                    aria-label="กรองตาม Role"
-                  >
-                    <option value="all">ทุก Role</option>
-                    <option value="admin">Admin</option>
-                    <option value="kitchen">Kitchen</option>
-                    <option value="user">User</option>
-                  </select>
-                  <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
-                </div>
-
-                <div className="relative flex-1 sm:flex-none">
-                  <select
-                    value={filterStatus}
-                    onChange={(e) => setFilterStatus(e.target.value)}
-                    className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 bg-slate-50 hover:bg-white transition-all duration-200 appearance-none"
-                    aria-label="กรองตามสถานะ"
-                  >
-                    <option value="all">ทุกสถานะ</option>
-                    <option value="active">ใช้งานอยู่</option>
-                    <option value="inactive">ไม่ใช้งาน</option>
-                  </select>
-                  <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
-                </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setShowCreateForm(true)}
-                  disabled={loading}
-                  className="flex-1 sm:flex-none bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white px-4 lg:px-6 py-3 rounded-xl flex items-center justify-center gap-2 transition-all duration-200 hover:shadow-lg hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
-                  aria-label="เพิ่มผู้ใช้ใหม่"
-                >
-                  {loading ? (
-                    <LoadingSpinner size="sm" />
-                  ) : (
-                    <UserPlus className="w-4 h-4" />
-                  )}
-                  <span className="hidden sm:inline">เพิ่มผู้ใช้</span>
-                  <span className="sm:hidden">เพิ่ม</span>
-                </button>
-                <button
-                  onClick={() => setShowMenuUpload(true)}
-                  disabled={loading}
-                  className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white px-4 lg:px-6 py-3 rounded-xl flex items-center justify-center gap-2 transition-all duration-200 hover:shadow-lg hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
-                  aria-label="อัพโหลดเมนูอาหาร"
-                >
-                  {loading ? (
-                    <LoadingSpinner size="sm" />
-                  ) : (
-                    <Upload className="w-4 h-4" />
-                  )}
-                  <span className="hidden sm:inline">อัพโหลดเมนู</span>
-                  <span className="sm:hidden">เมนู</span>
-                </button>
-              </div>
-            </div>
+            <button
+              onClick={() => setShowUserModal(true)}
+              className="bg-primary text-on-primary h-[48px] w-full sm:w-auto px-md rounded-lg font-label-md flex items-center justify-center gap-base active:scale-95 transition-all shadow-md"
+            >
+              <span className="material-symbols-outlined text-[20px]">
+                person_add
+              </span>
+              <span>Add New Member</span>
+            </button>
           </div>
         </div>
 
-        {/* Enhanced User Form with Better Validation */}
-        {(showCreateForm || editingUser) && (
-          <div className="bg-white rounded-2xl shadow-lg border border-slate-200 p-6 lg:p-8 mb-6 backdrop-blur-sm">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="p-2 bg-blue-100 rounded-xl">
-                <UserPlus className="w-6 h-6 text-blue-600" />
+        {auth?.role === "superadmin" && (
+          <section className="mb-lg rounded-xl border border-amber-100 bg-amber-50/70 p-md shadow-sm">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="text-label-md font-bold uppercase tracking-wider text-amber-700">
+                  Platform approval queue
+                </p>
+                <h3 className="mt-1 font-h2 text-h2 text-slate-950">
+                  Restaurant approvals
+                </h3>
+                <p className="mt-1 text-body-sm text-slate-600">
+                  Review restaurants created by new owners before they can
+                  operate in the system.
+                </p>
               </div>
-              <h2 className="text-xl lg:text-2xl font-bold text-slate-800">
-                {editingUser ? "แก้ไขข้อมูลผู้ใช้" : "เพิ่มผู้ใช้ใหม่"}
-              </h2>
-            </div>
-
-            <form
-              onSubmit={editingUser ? updateUser : handleSubmit}
-              className="grid md:grid-cols-2 gap-6"
-            >
-              <FormInput
-                id="username"
-                label="Username"
-                type="text"
-                placeholder="กรอก Username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                error={errors.username}
-                required
-                loading={submitLoading}
-                icon={Users}
-              />
-
-              <FormInput
-                id="email"
-                label="Email"
-                type="email"
-                placeholder="กรอก Email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                error={errors.email}
-                required
-                loading={submitLoading}
-              />
-
-              {!editingUser && (
-                <FormInput
-                  id="password"
-                  label="Password"
-                  type="password"
-                  placeholder="กรอก Password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  error={errors.password}
-                  required
-                  loading={submitLoading}
-                />
-              )}
-
-              <div className="space-y-2">
-                <label className="flex items-center text-sm font-medium text-slate-700 gap-2">
-                  <Shield className="w-4 h-4" />
-                  Role <span className="text-red-500">*</span>
-                </label>
-                <div className="relative">
-                  <select
-                    value={userRole}
-                    onChange={(e) => setUserRole(e.target.value)}
-                    disabled={submitLoading}
-                    className="w-full border border-slate-200 p-3 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 bg-slate-50 hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed appearance-none"
-                    aria-label="เลือก Role"
-                  >
-                    <option value="user">User</option>
-                    <option value="admin">Admin</option>
-                    <option value="kitchen">Kitchen</option>
-                  </select>
-                  <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
-                </div>
-              </div>
-            </form>
-
-            <div className="mt-8 flex flex-col sm:flex-row gap-4">
               <button
-                onClick={editingUser ? updateUser : handleSubmit}
-                disabled={submitLoading}
-                className="flex-1 sm:flex-none bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white px-8 py-3 rounded-xl transition-all duration-200 hover:shadow-lg hover:scale-105 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                type="button"
+                onClick={loadPendingRestaurants}
+                disabled={restaurantsLoading}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-lg border border-amber-200 bg-white px-4 text-sm font-semibold text-amber-800 transition hover:bg-amber-100 disabled:opacity-60"
               >
-                {submitLoading && <LoadingSpinner size="sm" />}
-                {editingUser ? "บันทึกการแก้ไข" : "สร้างผู้ใช้"}
-              </button>
-              <button
-                onClick={editingUser ? cancelEdit : resetForm}
-                disabled={submitLoading}
-                className="flex-1 sm:flex-none bg-slate-500 hover:bg-slate-600 text-white px-8 py-3 rounded-xl transition-all duration-200 hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                ยกเลิก
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Enhanced Menu Upload Modal with Better UX */}
-        {showMenuUpload && (
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div
-              ref={modalRef}
-              className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl animate-in fade-in-0 zoom-in-95 duration-200"
-            >
-              <div className="flex justify-between items-center p-6 border-b border-slate-200 sticky top-0 bg-white rounded-t-2xl">
-                <h2 className="text-xl lg:text-2xl font-bold flex items-center gap-3 text-slate-800">
-                  <div className="p-2 bg-emerald-100 rounded-xl">
-                    <Upload className="w-6 h-6 text-emerald-600" />
-                  </div>
-                  อัพโหลดเมนูอาหาร
-                </h2>
-                <button
-                  onClick={resetMenuForm}
-                  disabled={submitLoading}
-                  className="text-slate-400 hover:text-slate-600 p-2 hover:bg-slate-100 rounded-xl transition-all duration-200 disabled:opacity-50"
-                  aria-label="ปิด"
+                <span
+                  className={`material-symbols-outlined text-[18px] ${
+                    restaurantsLoading ? "animate-spin" : ""
+                  }`}
                 >
-                  <X className="w-6 h-6" />
-                </button>
-              </div>
-
-              <form onSubmit={handleMenuSubmit} className="p-6 space-y-6">
-                <div className="grid md:grid-cols-2 gap-6">
-                  <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-slate-700 mb-3">
-                      <FileText className="w-4 h-4 inline mr-2" />
-                      ชื่อเมนู <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      disabled={submitLoading}
-                      className="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all duration-200 bg-slate-50 hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed"
-                      placeholder="กรอกชื่อเมนูอาหาร"
-                      value={menuData.name}
-                      onChange={(e) =>
-                        setMenuData({ ...menuData, name: e.target.value })
-                      }
-                    />
-                  </div>
-
-                  <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-slate-700 mb-3">
-                      <FileText className="w-4 h-4 inline mr-2" />
-                      รายละเอียด
-                    </label>
-                    <textarea
-                      disabled={submitLoading}
-                      className="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all duration-200 bg-slate-50 hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed"
-                      rows="3"
-                      placeholder="รายละเอียดของเมนูอาหาร"
-                      value={menuData.description}
-                      onChange={(e) =>
-                        setMenuData({
-                          ...menuData,
-                          description: e.target.value,
-                        })
-                      }
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-3">
-                      <DollarSign className="w-4 h-4 inline mr-2" />
-                      ราคา (บาท) <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="number"
-                      required
-                      min="0"
-                      step="0.01"
-                      disabled={submitLoading}
-                      className="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all duration-200 bg-slate-50 hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed"
-                      placeholder="0.00"
-                      value={menuData.price}
-                      onChange={(e) =>
-                        setMenuData({ ...menuData, price: e.target.value })
-                      }
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-3">
-                      <Tag className="w-4 h-4 inline mr-2" />
-                      หมวดหมู่ <span className="text-red-500">*</span>
-                    </label>
-                    <div className="relative">
-                      <select
-                        required
-                        disabled={submitLoading}
-                        className="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all duration-200 bg-slate-50 hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed appearance-none"
-                        value={menuData.category}
-                        onChange={(e) =>
-                          setMenuData({ ...menuData, category: e.target.value })
-                        }
-                      >
-                        <option value="">เลือกหมวดหมู่</option>
-                        <option value="appetizer">อาหารว่าง</option>
-                        <option value="main">อาหารจานหลัก</option>
-                        <option value="dessert">ของหวาน</option>
-                        <option value="drink">เครื่องดื่ม</option>
-                        <option value="salad">สลัด</option>
-                        <option value="soup">ซุป</option>
-                      </select>
-                      <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
-                    </div>
-                  </div>
-
-                  <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-slate-700 mb-3">
-                      <Plus className="w-4 h-4 inline mr-2" />
-                      ส่วนผสม
-                    </label>
-                    <textarea
-                      disabled={submitLoading}
-                      className="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all duration-200 bg-slate-50 hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed"
-                      rows="2"
-                      placeholder="ระบุส่วนผสมหลัก (แยกด้วยเครื่องหมายจุลภาค)"
-                      value={menuData.ingredients}
-                      onChange={(e) =>
-                        setMenuData({
-                          ...menuData,
-                          ingredients: e.target.value,
-                        })
-                      }
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-3">
-                    <Image className="w-4 h-4 inline mr-2" />
-                    รูปภาพเมนู
-                  </label>
-                  <div className="border-2 border-dashed border-slate-300 rounded-xl p-8 hover:border-emerald-400 transition-colors duration-200 text-center">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleImageChange}
-                      disabled={submitLoading}
-                      className="w-full disabled:opacity-50 disabled:cursor-not-allowed"
-                    />
-                    <p className="text-sm text-slate-500 mt-2">
-                      รองรับไฟล์: JPG, PNG, GIF (ขนาดไม่เกิน 5MB)
-                    </p>
-                    {imagePreview && (
-                      <div className="mt-4">
-                        <img
-                          src={imagePreview}
-                          alt="ตัวอย่างรูปภาพ"
-                          className="max-w-full h-40 object-cover rounded-xl shadow-md mx-auto"
-                        />
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex items-center">
-                  <input
-                    type="checkbox"
-                    id="isAvailable"
-                    checked={menuData.isAvailable}
-                    onChange={(e) =>
-                      setMenuData({
-                        ...menuData,
-                        isAvailable: e.target.checked,
-                      })
-                    }
-                    disabled={submitLoading}
-                    className="mr-3 w-4 h-4 text-emerald-600 border-slate-300 rounded focus:ring-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                  />
-                  <label
-                    htmlFor="isAvailable"
-                    className="text-sm font-medium text-slate-700 cursor-pointer"
-                  >
-                    เมนูพร้อมขาย
-                  </label>
-                </div>
-
-                <div className="flex flex-col sm:flex-row gap-4 pt-6 border-t border-slate-200">
-                  <button
-                    type="submit"
-                    disabled={submitLoading}
-                    className="flex-1 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white py-3 px-6 rounded-xl transition-all duration-200 hover:shadow-lg hover:scale-105 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {submitLoading ? (
-                      <LoadingSpinner size="sm" />
-                    ) : (
-                      <Upload className="w-4 h-4" />
-                    )}
-                    อัพโหลดเมนู
-                  </button>
-                  <button
-                    type="button"
-                    onClick={resetMenuForm}
-                    disabled={submitLoading}
-                    className="flex-1 sm:flex-none px-8 py-3 border border-slate-300 rounded-xl hover:bg-slate-50 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    ยกเลิก
-                  </button>
-                </div>
-              </form>
+                  refresh
+                </span>
+                Refresh queue
+              </button>
             </div>
-          </div>
+
+            <div className="mt-5 overflow-hidden rounded-lg border border-amber-100 bg-white">
+              {restaurantsLoading && pendingRestaurants.length === 0 ? (
+                <div className="px-md py-lg text-center text-body-sm text-slate-500">
+                  Loading pending restaurants...
+                </div>
+              ) : pendingRestaurants.length === 0 ? (
+                <div className="px-md py-lg text-center">
+                  <p className="font-label-md text-slate-700">
+                    No pending restaurants
+                  </p>
+                  <p className="mt-1 text-body-sm text-slate-500">
+                    New owner registrations will appear here.
+                  </p>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {pendingRestaurants.map((restaurant) => {
+                    const approving =
+                      restaurantActionId === `approve:${restaurant.id}`;
+                    const rejecting =
+                      restaurantActionId === `reject:${restaurant.id}`;
+
+                    return (
+                      <div
+                        key={restaurant.id}
+                        className="grid gap-4 px-md py-base md:grid-cols-[1fr_auto] md:items-center"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="truncate font-body-md font-bold text-slate-950">
+                              {restaurant.name}
+                            </p>
+                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-label-sm font-bold uppercase text-amber-800">
+                              {restaurant.status}
+                            </span>
+                          </div>
+                          <p className="mt-1 break-all text-body-sm text-slate-500">
+                            /{restaurant.slug}
+                          </p>
+                          <p className="mt-1 text-label-sm text-slate-400">
+                            Created{" "}
+                            {restaurant.created_at
+                              ? new Date(
+                                  restaurant.created_at,
+                                ).toLocaleString()
+                              : "recently"}
+                          </p>
+                        </div>
+                        <div className="flex flex-col gap-2 sm:flex-row">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateRestaurantStatus(restaurant.id, "approve")
+                            }
+                            disabled={!!restaurantActionId}
+                            className="inline-flex h-10 items-center justify-center rounded-lg bg-emerald-600 px-4 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-60"
+                          >
+                            {approving ? "Approving..." : "Approve"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateRestaurantStatus(restaurant.id, "reject")
+                            }
+                            disabled={!!restaurantActionId}
+                            className="inline-flex h-10 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                          >
+                            {rejecting ? "Rejecting..." : "Reject"}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </section>
         )}
 
-        {/* Enhanced Users Table with Better Mobile Experience */}
-        <div className="bg-white rounded-2xl shadow-lg border border-slate-200 overflow-hidden backdrop-blur-sm">
-          <div className="px-4 lg:px-6 py-4 border-b border-slate-200 bg-gradient-to-r from-slate-50 to-slate-100">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
-                <Users className="w-5 h-5" />
-                รายการผู้ใช้งาน ({filteredUsers.length})
-              </h3>
-              {loading && <LoadingSpinner size="sm" />}
+        {/* Analytics Bento Overview */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-gutter mb-lg">
+          <div className="bg-surface-container-lowest border border-slate-100 p-md rounded-xl shadow-sm hover:shadow-md transition-shadow">
+            <div className="flex items-center justify-between mb-base">
+              <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg">
+                <span className="material-symbols-outlined">group</span>
+              </div>
+              <span className="text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full text-label-sm font-bold">
+                +2 New
+              </span>
+            </div>
+            <p className="text-label-md text-secondary uppercase tracking-wider">
+              Total Staff
+            </p>
+            <p className="text-h1 font-display text-primary mt-xs">
+              {userCount}
+            </p>
+          </div>
+          <div className="bg-surface-container-lowest border border-slate-100 p-md rounded-xl shadow-sm hover:shadow-md transition-shadow">
+            <div className="flex items-center justify-between mb-base">
+              <div className="p-2 bg-emerald-50 text-emerald-600 rounded-lg">
+                <span className="material-symbols-outlined">bolt</span>
+              </div>
+              <span className="text-slate-400 text-label-sm">
+                Current Roster
+              </span>
+            </div>
+            <p className="text-label-md text-secondary uppercase tracking-wider">
+              Active Today
+            </p>
+            <p className="text-h1 font-display text-primary mt-xs">
+              {Math.round(userCount * 0.75)}
+            </p>
+          </div>
+          <div className="bg-surface-container-lowest border border-slate-100 p-md rounded-xl shadow-sm hover:shadow-md transition-shadow">
+            <div className="flex items-center justify-between mb-base">
+              <div className="p-2 bg-amber-50 text-amber-600 rounded-lg">
+                <span className="material-symbols-outlined">
+                  pending_actions
+                </span>
+              </div>
+              <span className="text-error font-bold text-label-sm">Urgent</span>
+            </div>
+            <p className="text-label-md text-secondary uppercase tracking-wider">
+              Open Shifts
+            </p>
+            <p className="text-h1 font-display text-primary mt-xs">
+              {reservedTables}
+            </p>
+          </div>
+        </div>
+
+        {/* User Management Table */}
+        <div className="bg-surface-container-lowest border border-slate-100 rounded-xl shadow-sm overflow-hidden">
+          <div className="px-md py-base border-b border-slate-100 flex items-center justify-between bg-surface-container-low/30">
+            <h3 className="font-h3 text-h3 text-primary">Staff Directory</h3>
+            <div className="flex items-center gap-xs">
+              <button
+                onClick={loadUsers}
+                className="p-2 text-outline hover:bg-surface-container-high rounded-lg transition-colors"
+              >
+                <span
+                  className={`material-symbols-outlined text-[20px] ${
+                    usersLoading ? "animate-spin" : ""
+                  }`}
+                >
+                  refresh
+                </span>
+              </button>
+              <button className="p-2 text-outline hover:bg-surface-container-high rounded-lg transition-colors">
+                <span className="material-symbols-outlined text-[20px]">
+                  filter_list
+                </span>
+              </button>
+              <button className="p-2 text-outline hover:bg-surface-container-high rounded-lg transition-colors">
+                <span className="material-symbols-outlined text-[20px]">
+                  download
+                </span>
+              </button>
             </div>
           </div>
-
-          {/* Loading State */}
-          {loading ? (
-            <div className="flex items-center justify-center py-12">
-              <div className="text-center">
-                <LoadingSpinner size="lg" className="mx-auto mb-4" />
-                <p className="text-slate-500">กำลังโหลดข้อมูล...</p>
-              </div>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className="px-4 lg:px-6 py-4 text-left text-sm font-semibold text-slate-700">
-                      ผู้ใช้งาน
-                    </th>
-                    <th className="px-4 lg:px-6 py-4 text-left text-sm font-semibold text-slate-700">
-                      Role
-                    </th>
-                    <th className="px-4 lg:px-6 py-4 text-left text-sm font-semibold text-slate-700">
-                      สถานะ
-                    </th>
-                    <th className="px-4 lg:px-6 py-4 text-left text-sm font-semibold text-slate-700 hidden lg:table-cell">
-                      สร้างเมื่อ
-                    </th>
-                    <th className="px-4 lg:px-6 py-4 text-right text-sm font-semibold text-slate-700">
-                      จัดการ
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200">
-                  {filteredUsers.map((user, index) => (
-                    <tr
-                      key={user.id}
-                      className="hover:bg-slate-50 transition-colors duration-200 group"
-                    >
-                      <td className="px-4 lg:px-6 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 lg:w-10 lg:h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white font-semibold text-xs lg:text-sm">
-                            {user.username.charAt(0).toUpperCase()}
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="font-semibold text-slate-900 truncate">
-                              {user.username}
-                            </div>
-                            <div className="text-xs lg:text-sm text-slate-500 truncate">
-                              {user.email}
-                            </div>
-                          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-surface-container-low/50">
+                  <th className="px-md py-base font-label-md text-secondary uppercase tracking-wider border-b border-slate-100">
+                    Name
+                  </th>
+                  <th className="px-md py-base font-label-md text-secondary uppercase tracking-wider border-b border-slate-100">
+                    Role
+                  </th>
+                  <th className="px-md py-base font-label-md text-secondary uppercase tracking-wider border-b border-slate-100">
+                    Status
+                  </th>
+                  <th className="px-md py-base font-label-md text-secondary uppercase tracking-wider border-b border-slate-100">
+                    Last Active
+                  </th>
+                  <th className="px-md py-base font-label-md text-secondary uppercase tracking-wider border-b border-slate-100 text-right">
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {users.map((user, idx) => (
+                  <tr
+                    key={user.username}
+                    className="hover:bg-surface-container-low/20 transition-colors group"
+                  >
+                    <td className="px-md py-md">
+                      <div className="flex items-center gap-md">
+                        <div className="w-10 h-10 rounded-full object-cover bg-primary-container text-on-primary font-bold flex justify-center items-center">
+                          {user.username.charAt(0).toUpperCase()}
                         </div>
-                      </td>
-                      <td className="px-4 lg:px-6 py-4">
-                        <div className="flex items-center gap-2">
-                          {getRoleIcon(user.role)}
-                          <span
-                            className={`px-2 lg:px-3 py-1 rounded-full text-xs font-semibold ${getRoleColor(
-                              user.role
-                            )}`}
-                          >
-                            {user.role}
-                          </span>
+                        <div>
+                          <p className="font-body-md font-semibold text-primary">
+                            {user.username}
+                          </p>
+                          <p className="text-label-sm text-outline">
+                            {user.email}
+                          </p>
                         </div>
-                      </td>
-                      <td className="px-4 lg:px-6 py-4">
+                      </div>
+                    </td>
+                    <td className="px-md py-md">
+                      <span
+                        className={`px-3 py-1 rounded-full text-label-md font-medium border capitalize ${getRoleBadgeClass(
+                          user.role,
+                        )}`}
+                      >
+                        {user.role}
+                      </span>
+                    </td>
+                    <td className="px-md py-md">
+                      <div className="flex items-center gap-2">
+                        <div
+                          className={`w-2 h-2 rounded-full ${
+                            idx === 0
+                              ? "bg-emerald-500 animate-pulse"
+                              : "bg-slate-400"
+                          }`}
+                        ></div>
                         <span
-                          className={`inline-flex items-center px-2 lg:px-3 py-1 rounded-full text-xs font-semibold ${
-                            user.status === "active"
-                              ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
-                              : "bg-slate-100 text-slate-800 border border-slate-200"
+                          className={`font-medium text-body-sm px-2 py-0.5 rounded ${
+                            idx === 0
+                              ? "text-emerald-700 bg-emerald-50"
+                              : "text-slate-600 bg-slate-50"
                           }`}
                         >
-                          <div
-                            className={`w-2 h-2 rounded-full mr-2 ${
-                              user.status === "active"
-                                ? "bg-emerald-500"
-                                : "bg-slate-400"
-                            }`}
-                          ></div>
-                          {user.status === "active"
-                            ? "ใช้งานอยู่"
-                            : "ไม่ใช้งาน"}
+                          {idx === 0 ? "Active" : "Offline"}
                         </span>
-                      </td>
-                      <td className="px-4 lg:px-6 py-4 text-sm text-slate-600 hidden lg:table-cell">
-                        {user.createdAt}
-                      </td>
-                      <td className="px-4 lg:px-6 py-4">
-                        <div className="flex gap-1 lg:gap-2 justify-end opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                          <button
-                            className="p-2 rounded-lg hover:bg-blue-100 text-blue-600 transition-all duration-200 hover:scale-110 touch-target"
-                            onClick={() => toggleUserStatus(user.id)}
-                            title="เปลี่ยนสถานะ"
-                            aria-label={`เปลี่ยนสถานะผู้ใช้ ${user.username}`}
-                          >
-                            {user.status === "active" ? (
-                              <EyeOff className="w-4 h-4" />
-                            ) : (
-                              <Eye className="w-4 h-4" />
-                            )}
-                          </button>
-                          <button
-                            onClick={() => startEdit(user)}
-                            title="แก้ไข"
-                            className="p-2 rounded-lg hover:bg-orange-100 text-orange-600 transition-all duration-200 hover:scale-110 touch-target"
-                            aria-label={`แก้ไขผู้ใช้ ${user.username}`}
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteUser(user.username)}
-                            title="ลบ"
-                            className="p-2 rounded-lg hover:bg-red-100 text-red-600 transition-all duration-200 hover:scale-110 touch-target"
-                            aria-label={`ลบผู้ใช้ ${user.username}`}
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                  {filteredUsers.length === 0 && !loading && (
-                    <tr>
-                      <td colSpan="5" className="text-center py-12">
-                        <div className="flex flex-col items-center gap-3">
-                          <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center">
-                            <Users className="w-8 h-8 text-slate-400" />
-                          </div>
-                          <div className="text-slate-500 font-medium">
-                            ไม่พบผู้ใช้งาน
-                          </div>
-                          <div className="text-sm text-slate-400 max-w-md text-center">
-                            {debouncedSearchTerm ||
-                            filterRole !== "all" ||
-                            filterStatus !== "all"
-                              ? "ลองเปลี่ยนเงื่อนไขการค้นหาหรือกรองข้อมูล"
-                              : "ยังไม่มีผู้ใช้ในระบบ เริ่มต้นด้วยการเพิ่มผู้ใช้ใหม่"}
-                          </div>
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+                      </div>
+                    </td>
+                    <td className="px-md py-md font-body-sm text-secondary">
+                      {idx === 0 ? "Now" : "2h ago"}
+                    </td>
+                    <td className="px-md py-md text-right">
+                      <div className="flex items-center justify-end gap-xs opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={() => startEditUser(user)}
+                          className="p-2 hover:bg-slate-100 rounded-lg text-secondary transition-colors"
+                        >
+                          <span className="material-symbols-outlined text-[18px]">
+                            edit
+                          </span>
+                        </button>
+                        <button
+                          onClick={() => handleDeleteUser(user.username)}
+                          className="p-2 hover:bg-error/10 rounded-lg text-error transition-colors"
+                        >
+                          <span className="material-symbols-outlined text-[18px]">
+                            delete
+                          </span>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {users.length === 0 && !usersLoading && (
+                  <tr>
+                    <td
+                      colSpan="5"
+                      className="px-md py-md text-center text-secondary"
+                    >
+                      No users found.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="px-md py-base border-t border-slate-100 bg-surface-container-low/10 flex items-center justify-between">
+            <p className="text-label-sm text-outline">
+              Showing {users.length} of {userCount} members
+            </p>
+            <div className="flex items-center gap-base">
+              <button
+                className="p-1 border border-outline-variant rounded hover:bg-surface-container-high transition-colors disabled:opacity-50"
+                disabled={true}
+              >
+                <span className="material-symbols-outlined text-[20px]">
+                  chevron_left
+                </span>
+              </button>
+              <button className="p-1 border border-outline-variant rounded hover:bg-surface-container-high transition-colors">
+                <span className="material-symbols-outlined text-[20px]">
+                  chevron_right
+                </span>
+              </button>
             </div>
-          )}
+          </div>
         </div>
 
-        {/* Confirmation Modal */}
-        <ConfirmationModal
-          isOpen={confirmModal.isOpen}
-          onClose={() => setConfirmModal({ ...confirmModal, isOpen: false })}
-          onConfirm={confirmModal.onConfirm}
-          title={confirmModal.title}
-          message={confirmModal.message}
-          type={confirmModal.type}
-          loading={submitLoading}
-        />
-      </div>
+        {/* Productivity Insights Card */}
+        <div className="mt-lg grid grid-cols-1 md:grid-cols-12 gap-gutter">
+          <div className="md:col-span-8 bg-primary-container text-on-primary-container p-lg rounded-xl flex items-center justify-between overflow-hidden relative group">
+            <div className="z-10 relative">
+              <h3 className="font-h2 text-h2 mb-base">
+                Weekly Roster Complete
+              </h3>
+              <p className="text-body-md opacity-80 max-w-md mb-md">
+                All staff shifts have been assigned for the upcoming week.
+                Review and publish to notify the team.
+              </p>
+              <button className="bg-tertiary-fixed text-on-tertiary-fixed px-md py-base rounded-lg font-label-md active:scale-95 transition-all">
+                Publish Roster
+              </button>
+            </div>
+            <div className="absolute right-0 top-0 h-full w-1/3 opacity-20 group-hover:opacity-30 transition-opacity">
+              <img
+                className="object-cover w-full h-full grayscale"
+                alt="Abstract background"
+                src="https://lh3.googleusercontent.com/aida-public/AB6AXuDdlSfmhY_-ndsdxW6GysEmfb0PF-tmZIRjEdjB5eSSbTwmpHqhUkqYvCBpIwC8xXfk7pBWKk_YrUOvCsulEwSMPSRYaj4eUVWlMN4weHDJj6qKA_tIjBGnUbaM-NnpXjfDamqw1XwvkfpvmxiVmXK6B_1pgsh0jy66a9VLyUKd5QbC9swczelkylFCC-t-CwXzuE0I2R0yYSpJM88a0y4kRYLA5gIUbnRAu-ONtYEy__9JYDGT0Lv4BlegRn-e28IYrJ10EoYkjA_8"
+              />
+            </div>
+          </div>
+          <div className="md:col-span-4 bg-white border border-slate-100 p-md rounded-xl flex flex-col justify-center">
+            <div className="flex items-center gap-base mb-sm">
+              <span
+                className="material-symbols-outlined text-amber-500"
+                style={{ fontVariationSettings: "'FILL' 1" }}
+              >
+                star
+              </span>
+              <p className="font-label-md text-primary uppercase">
+                Top Performer
+              </p>
+            </div>
+            <div className="flex items-center gap-md">
+              <div className="w-14 h-14 rounded-full border-2 border-amber-100 bg-primary-fixed flex justify-center items-center text-primary-container font-h2 font-bold">
+                {users[0]?.username?.charAt(0).toUpperCase() || "T"}
+              </div>
+              <div>
+                <p className="font-h3 text-h3 text-primary">
+                  {users[0]?.username || "System Admin"}
+                </p>
+                <p className="text-body-sm text-secondary">
+                  98% Service Efficiency
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      {showUserModal && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              style={{
+                position: "fixed",
+                top: 0,
+                left: 0,
+                width: "100vw",
+                height: "100vh",
+                zIndex: 9999,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: "1rem",
+                backgroundColor: "rgba(15, 23, 42, 0.5)",
+                backdropFilter: "blur(4px)",
+              }}
+              onClick={(e) => {
+                if (e.target === e.currentTarget) resetUserForm();
+              }}
+            >
+              <div
+                className="bg-surface-container-lowest w-full max-w-lg rounded-xl shadow-[0_8px_32px_rgba(45,62,97,0.12)] border border-outline-variant flex flex-col"
+                style={{ maxHeight: "calc(100dvh - 2rem)", width: "100%", maxWidth: "32rem" }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                {/* Header */}
+                <div className="px-6 py-5 border-b border-outline-variant flex items-center justify-between bg-surface-container-lowest shrink-0">
+                  <h2 className="font-h3 text-h3 text-on-surface">
+                    {editingUser ? "Edit Team Member" : "Add Team Member"}
+                  </h2>
+                  <button
+                    onClick={resetUserForm}
+                    className="text-on-surface-variant hover:text-on-surface transition-colors p-1 rounded-md hover:bg-surface-container"
+                  >
+                    <span className="material-symbols-outlined">close</span>
+                  </button>
+                </div>
+
+                {/* Body — scrollable */}
+                <div className="p-6 overflow-y-auto flex-1">
+                  <form id="userForm" className="flex flex-col gap-6" onSubmit={handleUserSubmit}>
+                    <div className="flex flex-col gap-2">
+                      <label className="font-label-md text-label-md text-on-surface" htmlFor="username">Username</label>
+                      <div className="relative">
+                        <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-[20px]">person</span>
+                        <input
+                          id="username"
+                          type="text"
+                          required
+                          value={userForm.username}
+                          onChange={(e) => setUserForm({ ...userForm, username: e.target.value })}
+                          disabled={!!editingUser && auth?.role !== "superadmin"}
+                          className="w-full pl-10 pr-4 h-12 bg-surface-container-lowest border border-outline-variant rounded-lg font-body-sm text-body-sm text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors placeholder:text-outline/70 disabled:opacity-50 disabled:bg-surface-container-low"
+                          placeholder="e.g. johndoe"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <label className="font-label-md text-label-md text-on-surface" htmlFor="email">Email Address</label>
+                      <div className="relative">
+                        <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-[20px]">mail</span>
+                        <input
+                          id="email"
+                          type="email"
+                          required
+                          value={userForm.email}
+                          onChange={(e) => setUserForm({ ...userForm, email: e.target.value })}
+                          className="w-full pl-10 pr-4 h-12 bg-surface-container-lowest border border-outline-variant rounded-lg font-body-sm text-body-sm text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors placeholder:text-outline/70"
+                          placeholder="john.doe@restaurant.com"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                      <div className="flex flex-col gap-2">
+                        <label className="font-label-md text-label-md text-on-surface" htmlFor="role">Role</label>
+                        <div className="relative">
+                          <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-[20px]">work</span>
+                          <select
+                            id="role"
+                            value={userForm.role}
+                            onChange={(e) => setUserForm({ ...userForm, role: e.target.value })}
+                            className="w-full pl-10 pr-10 h-12 bg-surface-container-lowest border border-outline-variant rounded-lg font-body-sm text-body-sm text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors appearance-none cursor-pointer"
+                          >
+                            <option value="staff">Staff</option>
+                            <option value="admin">Admin</option>
+                            <option value="kitchen">Kitchen</option>
+                            <option value="user">Customer/User</option>
+                            {auth?.role === "superadmin" && <option value="owner">Owner</option>}
+                          </select>
+                          <span className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-outline text-[20px] pointer-events-none">expand_more</span>
+                        </div>
+                      </div>
+                      {!editingUser && (
+                        <div className="flex flex-col gap-2">
+                          <label className="font-label-md text-label-md text-on-surface" htmlFor="password">Password</label>
+                          <div className="relative">
+                            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-[20px]">lock</span>
+                            <input
+                              id="password"
+                              type="password"
+                              required
+                              value={userForm.password}
+                              onChange={(e) => setUserForm({ ...userForm, password: e.target.value })}
+                              className="w-full pl-10 pr-4 h-12 bg-surface-container-lowest border border-outline-variant rounded-lg font-body-sm text-body-sm text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors placeholder:text-outline/70"
+                              placeholder="Enter initial password"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </form>
+                </div>
+
+                {/* Footer */}
+                <div className="px-6 py-4 border-t border-outline-variant bg-surface-container-lowest flex items-center justify-end gap-3 shrink-0">
+                  <button
+                    type="button"
+                    onClick={resetUserForm}
+                    className="h-10 px-4 rounded-lg font-label-md text-label-md text-on-surface border border-outline-variant hover:bg-surface-container-low transition-colors focus:outline-none focus:ring-2 focus:ring-primary/50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    form="userForm"
+                    disabled={userSubmitting}
+                    className="h-10 px-6 rounded-lg font-label-md text-label-md text-on-primary bg-primary hover:bg-primary/90 transition-colors shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/50 flex items-center gap-2 disabled:opacity-60"
+                  >
+                    {userSubmitting ? (
+                      <span>Saving...</span>
+                    ) : editingUser ? (
+                      <>
+                        <span className="material-symbols-outlined text-[18px]">save</span>
+                        Save Changes
+                      </>
+                    ) : (
+                      <>
+                        <span className="material-symbols-outlined text-[18px]">person_add</span>
+                        Add Member
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+
+      <MenuUpload
+        isOpen={showMenu}
+        onClose={resetMenuForm}
+        menuData={menuData}
+        setMenuData={setMenuData}
+        handleSubmit={handleMenuSubmit}
+        handleImageChange={handleImageChange}
+        imagePreview={imagePreview}
+        submitLoading={submitLoading}
+      />
     </div>
   );
-};
-
-export default AdminUserManagement;
+}

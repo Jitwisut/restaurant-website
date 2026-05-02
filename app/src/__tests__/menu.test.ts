@@ -1,7 +1,8 @@
 import { describe, test, expect } from "bun:test";
 import { Elysia } from "elysia";
+import jwt from "@elysiajs/jwt";
 import { menurouter } from "../router/menurouter";
-import { createTestMenuItem } from "./helpers/testUtils";
+import { authHeaders, createTestMenuItem } from "./helpers/testUtils";
 
 /**
  * Menu Controller Tests
@@ -9,7 +10,14 @@ import { createTestMenuItem } from "./helpers/testUtils";
  */
 
 const createTestApp = () => {
-    return new Elysia().use(menurouter);
+    return new Elysia()
+        .use(
+            jwt({
+                name: "jwt",
+                secret: process.env.JWT_SECRET || "test-secret-key",
+            })
+        )
+        .use(menurouter);
 };
 
 describe("Menu Controller - Get Menu", () => {
@@ -19,6 +27,7 @@ describe("Menu Controller - Get Menu", () => {
         const response = await app.handle(
             new Request("http://localhost/menu/get", {
                 method: "GET",
+                headers: authHeaders(),
             })
         );
 
@@ -34,6 +43,7 @@ describe("Menu Controller - Get Menu", () => {
         const response = await app.handle(
             new Request("http://localhost/menu/get", {
                 method: "GET",
+                headers: authHeaders(),
             })
         );
 
@@ -54,6 +64,7 @@ describe("Menu Controller - Get Menu", () => {
         const response = await app.handle(
             new Request("http://localhost/menu/get", {
                 method: "GET",
+                headers: authHeaders(),
             })
         );
 
@@ -73,6 +84,7 @@ describe("Menu Controller - Get Menu", () => {
         const response = await app.handle(
             new Request("http://localhost/menu/get", {
                 method: "GET",
+                headers: authHeaders(),
             })
         );
 

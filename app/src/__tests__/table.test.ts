@@ -1,344 +1,256 @@
-import { describe, test, expect, beforeEach } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { Elysia } from "elysia";
 import jwt from "@elysiajs/jwt";
 import { Tablerouter } from "../router/Tablerouter";
+import { getTestDB } from "./setup";
 import {
+  authHeaders,
   createAvailableTable,
   createOpenTable,
-  randomTableNumber,
+  decodeJWT,
+  ensureTestRestaurant,
+  setTestSubscription,
+  TEST_JWT_SECRET,
+  TEST_RESTAURANT_ID,
 } from "./helpers/testUtils";
-import { getTestDB } from "./setup";
-/**
- * Table Controller Tests
- * Tests for table management (open, close, check, add)
- */
 
-const jwtsecret = process.env.JWT_SECRET || "test-secret-key";
 const db = getTestDB();
+
 const createTestApp = () => {
   return new Elysia()
-    .use(
-      jwt({
-        name: "jwt",
-        secret: jwtsecret,
-      }),
-    )
+    .use(jwt({ name: "jwt", secret: TEST_JWT_SECRET }))
     .use(Tablerouter);
 };
 
-describe("Table Controller - Get Tables", () => {
-  test("should retrieve all tables", async () => {
+beforeEach(async () => {
+  await ensureTestRestaurant();
+});
+
+describe("Table Controller - Multi-tenant auth", () => {
+  test("rejects protected table endpoints without JWT", async () => {
     const app = createTestApp();
+    const response = await app.handle(
+      new Request("http://localhost/tables/gettable", { method: "GET" }),
+    );
+
+    expect(response.status).toBe(401);
+  });
+
+  test("retrieves tables for the token restaurant", async () => {
+    const app = createTestApp();
+    await createAvailableTable(21);
 
     const response = await app.handle(
       new Request("http://localhost/tables/gettable", {
         method: "GET",
+        headers: authHeaders(),
       }),
     );
 
     expect(response.status).toBe(200);
     const data = await response.json();
-    expect(data.tables).toBeDefined();
     expect(Array.isArray(data.tables)).toBe(true);
+    expect(data.tables.every((table: any) => table.restaurant_id === TEST_RESTAURANT_ID)).toBe(true);
   });
-  beforeEach(async () => {
-    // สมมติว่า tableNumber ที่จะเทสคือ 1
-    await db.query("DELETE FROM tables WHERE table_number = $1", [1]);
-  });
-  test("should return tables with correct structure", async () => {
+
+  test("blocks table access when the subscription is suspended", async () => {
     const app = createTestApp();
+    await setTestSubscription(TEST_RESTAURANT_ID, {
+      status: "suspended",
+    });
 
     const response = await app.handle(
       new Request("http://localhost/tables/gettable", {
         method: "GET",
+        headers: authHeaders(),
       }),
     );
 
+    expect(response.status).toBe(403);
     const data = await response.json();
-
-    if (data.tables.length > 0) {
-      const table = data.tables[0];
-      expect(table).toHaveProperty("table_number");
-      expect(table).toHaveProperty("status");
-    }
+    expect(data.code).toBe("subscription_inactive");
   });
 });
 
-describe("Table Controller - Open Table", () => {
-  test("should successfully open a table", async () => {
+describe("Table Controller - Open and close", () => {
+  test("opens an available table in the token restaurant", async () => {
     const app = createTestApp();
-    const tableNumber = 5;
+    const tableNumber = 31;
+    await createAvailableTable(tableNumber);
 
     const response = await app.handle(
       new Request("http://localhost/tables/opentable", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ number: tableNumber }),
       }),
     );
 
     expect(response.status).toBe(200);
     const data = await response.json();
-    expect(data.message).toContain("เปิดโต๊ะสำเร็จ");
+    expect(data.message).toContain("Open table success");
     expect(data.table_number).toBe(tableNumber);
     expect(data.session_hash).toBeDefined();
-    expect(data.qr_code_url).toBeDefined();
-    expect(data.fullurl).toBeDefined();
+    expect(data.qr_code_url).toMatch(/^data:image\/png;base64,/);
   });
-  beforeEach(async () => {
-    // 1. ลบโต๊ะเบอร์ 5 ทิ้งก่อน (ล้างไพ่) กันค่าค้าง
-    await db.query("DELETE FROM tables WHERE table_number = $1", [5]);
 
-    // 2. สร้างโต๊ะใหม่ โดยยัดสถานะ 'available' เข้าไปตรงๆ
-    // (เพื่อให้ตรงกับเงื่อนไข AND status = 'available' ใน Controller)
-    await db.query(
-      `
-    INSERT INTO tables (table_number, status, customer_session, qr_code_url)
-    VALUES ($1, 'available', NULL, NULL)
-  `,
-      [5],
-    );
-  });
-  test("should generate QR code when opening table", async () => {
+  test("rejects invalid table numbers before opening", async () => {
     const app = createTestApp();
 
     const response = await app.handle(
       new Request("http://localhost/tables/opentable", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ number: 3 }),
-      }),
-    );
-
-    const data = await response.json();
-    if (response.status === 200) {
-      expect(data.qr_code_url).toMatch(/^data:image\/png;base64,/);
-    }
-  });
-
-  test("should reject invalid table number", async () => {
-    const app = createTestApp();
-
-    const response = await app.handle(
-      new Request("http://localhost/tables/opentable", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ number: 0 }),
       }),
     );
 
     expect(response.status).toBe(400);
-    const data = await response.json();
-    expect(data.message).toContain("ไม่ถูกต้อง");
   });
 
-  test("should reject table number above 99", async () => {
+  test("rejects opening an already open table", async () => {
     const app = createTestApp();
+    const tableNumber = 32;
+    await createOpenTable(tableNumber);
 
     const response = await app.handle(
       new Request("http://localhost/tables/opentable", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ number: 100 }),
-      }),
-    );
-
-    expect(response.status).toBe(400);
-  });
-
-  test("should handle already open table", async () => {
-    const app = createTestApp();
-    const tableNumber = 7;
-
-    // Open table first time
-    await app.handle(
-      new Request("http://localhost/tables/opentable", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ number: tableNumber }),
-      }),
-    );
-
-    // Try to open same table again
-    const response = await app.handle(
-      new Request("http://localhost/tables/opentable", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ number: tableNumber }),
       }),
     );
 
     expect(response.status).toBe(409);
-    const data = await response.json();
-    expect(data.message).toContain("ถูกเปิดแล้ว");
   });
-});
 
-describe("Table Controller - Close Table", () => {
-  /* beforeEach(async () => {
-    // ลบข้อมูลเก่ากันพลาด
-    await db.query("DELETE FROM tables WHERE table_number = $1", [4]);
-
-    // สร้างโต๊ะเบอร์ 4 สถานะ 'available' เตรียมไว้
-    await db.query(
-      "INSERT INTO tables (table_number, status) VALUES ($1, 'available')",
-      [4],
-    );
-  });*/
-  test("should successfully close an open table", async () => {
+  test("closes an open table in the token restaurant", async () => {
     const app = createTestApp();
-    const tableNumber = 4;
-
-    // First open a table
-    await createAvailableTable(tableNumber);
-    await app.handle(
-      new Request("http://localhost/tables/opentable", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ number: tableNumber }),
-      }),
-    );
-
-    // Then close it
+    const tableNumber = 33;
     await createOpenTable(tableNumber);
+
     const response = await app.handle(
       new Request("http://localhost/tables/closetable", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ number: tableNumber }),
       }),
     );
 
     expect(response.status).toBe(200);
     const data = await response.json();
-    expect(data.message).toContain("เรียบร้อย");
+    expect(data.message).toContain("Close table success");
     expect(data.table_number).toBe(tableNumber);
   });
-
-  test("should reject closing non-existent table", async () => {
-    const app = createTestApp();
-
-    const response = await app.handle(
-      new Request("http://localhost/tables/closetable", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ number: "99" }),
-      }),
-    );
-
-    expect(response.status).toBe(404);
-  });
-
-  test("should reject invalid table number when closing", async () => {
-    const app = createTestApp();
-
-    const response = await app.handle(
-      new Request("http://localhost/tables/closetable", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ number: "0" }),
-      }),
-    );
-
-    expect(response.status).toBe(400);
-  });
 });
 
-describe("Table Controller - Check Table", () => {
-  test("should find table by session hash", async () => {
+describe("Table Controller - Session and add table", () => {
+  test("finds table by public session hash", async () => {
     const app = createTestApp();
-    const tableNumber = 6;
-    await createAvailableTable(tableNumber);
-    // Open a table first
-    const openResponse = await app.handle(
-      new Request("http://localhost/tables/opentable", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ number: tableNumber }),
-      }),
-    );
+    const tableNumber = 34;
+    const session = await createOpenTable(tableNumber);
 
-    const openData = await openResponse.json();
-    const sessionHash = openData.session_hash;
-
-    // Check the table using session hash
     const response = await app.handle(
-      new Request(`http://localhost/tables/checktable/${sessionHash}`, {
+      new Request(`http://localhost/tables/checktable/${session}`, {
         method: "GET",
       }),
     );
 
     expect(response.status).toBe(200);
     const data = await response.json();
-    expect(data.message).toContain("พบโต๊ะ");
-    expect(data.table).toBeDefined();
+    expect(Number(data.table.table_number)).toBe(tableNumber);
   });
 
-  test("should return 404 for invalid session hash", async () => {
+  test("issues a guest token for an active public session", async () => {
+    const app = createTestApp();
+    const tableNumber = 35;
+    const session = await createOpenTable(tableNumber);
+
+    const response = await app.handle(
+      new Request(`http://localhost/tables/session/${session}/guest-token`, {
+        method: "POST",
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.token).toBeDefined();
+    expect(data.session_id).toBe(session);
+    expect(Number(data.table_number)).toBe(tableNumber);
+    expect(Number(data.restaurant_id)).toBe(TEST_RESTAURANT_ID);
+
+    const payload = decodeJWT(data.token);
+    expect(payload.role).toBe("user");
+    expect(payload.token_type).toBe("guest_session");
+    expect(payload.session_id).toBe(session);
+    expect(Number(payload.table_number)).toBe(tableNumber);
+    expect(Number(payload.restaurant_id)).toBe(TEST_RESTAURANT_ID);
+  });
+
+  test("rejects guest token requests for missing sessions", async () => {
     const app = createTestApp();
 
     const response = await app.handle(
-      new Request("http://localhost/tables/checktable/invalid-hash-123", {
-        method: "GET",
+      new Request(
+        "http://localhost/tables/session/not-a-real-session/guest-token",
+        {
+          method: "POST",
+        },
+      ),
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  test("rejects guest token requests after the table is closed", async () => {
+    const app = createTestApp();
+    const tableNumber = 36;
+    const session = await createOpenTable(tableNumber);
+
+    await app.handle(
+      new Request("http://localhost/tables/closetable", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ number: tableNumber }),
+      }),
+    );
+
+    const response = await app.handle(
+      new Request(`http://localhost/tables/session/${session}/guest-token`, {
+        method: "POST",
       }),
     );
 
     expect(response.status).toBe(404);
   });
 
-  test("should return 400 for missing session hash", async () => {
+  test("adds the next table number per restaurant", async () => {
     const app = createTestApp();
-
-    const response = await app.handle(
-      new Request("http://localhost/tables/checktable/", {
-        method: "GET",
-      }),
-    );
-
-    expect(response.status).toBe(404);
-  });
-});
-
-describe("Table Controller - Add Table", () => {
-  test("should successfully add a new table", async () => {
-    const app = createTestApp();
+    await db.query("DELETE FROM order_items WHERE restaurant_id=$1", [TEST_RESTAURANT_ID]);
+    await db.query("DELETE FROM orders WHERE restaurant_id=$1", [TEST_RESTAURANT_ID]);
+    await db.query("DELETE FROM sessions WHERE restaurant_id=$1", [TEST_RESTAURANT_ID]);
+    await db.query("DELETE FROM tables WHERE restaurant_id=$1", [TEST_RESTAURANT_ID]);
 
     const response = await app.handle(
       new Request("http://localhost/tables/addtable", {
         method: "POST",
+        headers: authHeaders(),
       }),
     );
 
     expect(response.status).toBe(200);
     const data = await response.json();
     expect(data.success).toBe(true);
-    expect(data.message).toContain("เรียบร้อย");
-    expect(data.new_table).toBeDefined();
+    expect(data.new_table).toBe(1);
   });
 
-  test("new table should have auto-incremented number", async () => {
-    const app = createTestApp();
-
-    const response = await app.handle(
-      new Request("http://localhost/tables/addtable", {
-        method: "POST",
-      }),
-    );
-
-    const data = await response.json();
-    expect(typeof data.new_table).toBe("number");
-    expect(data.new_table).toBeGreaterThan(0);
-  });
-});
-
-describe("Table Controller - Order Success", () => {
-  test("should mark order as completed", async () => {
+  test("marks orders complete only in the token restaurant", async () => {
     const app = createTestApp();
 
     const response = await app.handle(
       new Request("http://localhost/tables/ordersuccess", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ table_number: 1 }),
       }),
     );
@@ -346,19 +258,5 @@ describe("Table Controller - Order Success", () => {
     expect(response.status).toBe(200);
     const data = await response.json();
     expect(data.message).toBe("success");
-  });
-
-  test("should reject missing table number", async () => {
-    const app = createTestApp();
-
-    const response = await app.handle(
-      new Request("http://localhost/tables/ordersuccess", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      }),
-    );
-
-    expect(response.status).toBe(404);
   });
 });

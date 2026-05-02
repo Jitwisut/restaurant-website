@@ -1,44 +1,110 @@
 "use client";
-import { XCircle, Home } from "lucide-react";
+
+import { DoorClosed, Home, MessageCircle } from "lucide-react";
 import Link from "next/link";
 
 export default function TableClosedPage() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-red-50 to-pink-50 p-4">
-      <div className="max-w-md w-full bg-white/80 backdrop-blur-sm rounded-3xl shadow-2xl p-8 text-center border border-white/50">
-        <div className="mb-6">
-          <div className="bg-gradient-to-r from-red-500 to-pink-500 p-4 rounded-full inline-block mb-4">
-            <XCircle className="w-16 h-16 text-white" />
-          </div>
+    <main
+      className="min-h-screen bg-[#fff7f7] text-slate-900"
+      style={{
+        display: "grid",
+        placeItems: "center",
+        padding: "24px",
+        width: "100%",
+        minWidth: 0,
+      }}
+    >
+      <section
+        className="border border-rose-100 bg-white shadow-xl"
+        style={{
+          width: "min(460px, calc(100vw - 48px))",
+          minWidth: "min(320px, calc(100vw - 48px))",
+          maxWidth: "calc(100vw - 48px)",
+          borderRadius: 8,
+          padding: "32px",
+          boxSizing: "border-box",
+          textAlign: "center",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          className="mx-auto mb-6 flex items-center justify-center bg-rose-600 text-white"
+          style={{
+            width: 72,
+            height: 72,
+            borderRadius: 8,
+            flexShrink: 0,
+          }}
+        >
+          <DoorClosed aria-hidden="true" className="h-9 w-9" />
         </div>
 
-        <h1 className="text-4xl font-bold text-gray-800 mb-4">
+        <h1
+          className="font-bold text-slate-950"
+          style={{
+            fontSize: "clamp(28px, 8vw, 40px)",
+            lineHeight: 1.1,
+            letterSpacing: 0,
+            marginBottom: 16,
+            whiteSpace: "normal",
+            overflowWrap: "normal",
+            wordBreak: "normal",
+          }}
+        >
           โต๊ะถูกปิดแล้ว
         </h1>
 
-        <p className="text-xl text-gray-600 mb-2">
-          ขออภัย โต๊ะนี้ได้ถูกปิดการใช้งานแล้ว
+        <p
+          className="mx-auto text-slate-600"
+          style={{
+            maxWidth: 360,
+            fontSize: 16,
+            lineHeight: 1.7,
+            marginBottom: 8,
+            whiteSpace: "normal",
+            overflowWrap: "normal",
+            wordBreak: "normal",
+          }}
+        >
+          ขออภัย โต๊ะนี้ถูกปิดการใช้งานแล้ว
         </p>
 
-        <p className="text-gray-500 mb-8">
+        <p
+          className="mx-auto text-slate-500"
+          style={{
+            maxWidth: 360,
+            fontSize: 14,
+            lineHeight: 1.7,
+            marginBottom: 28,
+            whiteSpace: "normal",
+            overflowWrap: "normal",
+            wordBreak: "normal",
+          }}
+        >
           กรุณาติดต่อพนักงานเพื่อเปิดโต๊ะใหม่
         </p>
 
-        <div className="space-y-3">
+        <div className="grid gap-3 sm:grid-cols-2">
           <Link
             href="/"
-            className="flex items-center justify-center gap-2 bg-gradient-to-r from-orange-500 to-pink-500 text-white font-semibold py-3 px-6 rounded-full hover:shadow-lg transition-all"
+            className="inline-flex items-center justify-center gap-2 bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+            style={{ borderRadius: 8, minHeight: 48 }}
           >
-            <Home className="w-5 h-5" />
+            <Home aria-hidden="true" className="h-4 w-4" />
             กลับหน้าหลัก
           </Link>
+          <button
+            type="button"
+            className="inline-flex items-center justify-center gap-2 border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+            style={{ borderRadius: 8, minHeight: 48 }}
+            onClick={() => window.history.back()}
+          >
+            <MessageCircle aria-hidden="true" className="h-4 w-4" />
+            กลับไปก่อนหน้า
+          </button>
         </div>
-
-        <div className="mt-6 text-sm text-gray-400">
-          <p>หากคุณคิดว่านี่เป็นข้อผิดพลาด</p>
-          <p>กรุณาติดต่อพนักงานประจำโต๊ะ</p>
-        </div>
-      </div>
-    </div>
+      </section>
+    </main>
   );
 }

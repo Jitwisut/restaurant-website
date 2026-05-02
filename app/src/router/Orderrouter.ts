@@ -7,8 +7,8 @@ export const Orderrouter = (app: Elysia) => {
         table_number: t.Optional(
           t.Number({
             minimum: 1,
-            maximum: 11,
-            error: "Quantity must be between 1-11",
+            maximum: 14,
+            error: "Quantity must be between 1-14",
           }),
         ),
       }),

@@ -12,7 +12,7 @@ jobs:
     name: Run Bun Tests
     runs-on: ubuntu-latest
 
-    # 2. พระเอกของเรา: สร้าง Database จำลอง (Service)
+    # 2.  สร้าง Database จำลอง (Service)
     services:
       postgres:
         image: postgres:15

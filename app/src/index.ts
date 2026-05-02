@@ -3,7 +3,6 @@ import cors from "@elysiajs/cors";
 import jwt from "@elysiajs/jwt";
 import { elysiaHelmet } from "elysiajs-helmet";
 import { rateLimit } from "elysia-rate-limit";
-/* routers ของคุณ */
 import { Auths } from "./router/Auth";
 import { Adminrouter } from "./router/Adminrouter";
 import { Tablerouter } from "./router/Tablerouter";
@@ -12,48 +11,57 @@ import { menurouter } from "./router/menurouter";
 import { web } from "./router/websocket";
 import { profilerouter } from "./router/Profilerouter";
 import { Orderrouter } from "./router/Orderrouter";
-const port = Number(Bun.env.PORT);
+import { RestaurantRouter } from "./router/RestaurantRouter";
+
+const port = Number(Bun.env.PORT || 4000);
 const jwtsecret = Bun.env.JWT_SECRET as string;
 const url = Bun.env.ORIGIN_URL;
 const url2 = Bun.env.ORIGIN_URL2;
 const app = new Elysia();
+const csp =
+  "default-src 'self'; connect-src 'self' http://localhost:4000 ws://localhost:4000 https://backend-restaurant-deploy.onrender.com https://frontend-restaurant-97nb.vercel.app";
 
-/* ① CORS ต้องมาก่อนทุกอย่าง  */
+function isAllowedOrigin(origin: string | null) {
+  if (!origin) return false;
+  if (origin.includes("localhost")) return true;
+  return origin === url || origin === url2;
+}
+
+function applyCorsHeaders(request: Request, set: any) {
+  const origin = request.headers.get("origin");
+  if (!isAllowedOrigin(origin)) return;
+
+  set.headers["Access-Control-Allow-Origin"] = origin;
+  set.headers["Access-Control-Allow-Credentials"] = "true";
+  set.headers["Vary"] = "Origin";
+}
+
 app
-
   .use(
     cors({
-      origin: (request) => {
-        const origin = request.headers.get("origin");
-        // อนุญาต localhost สำหรับ development
-        if (origin?.includes("localhost")) return true;
-        // อนุญาต origin จาก env
-        return origin === url || origin === url2;
-      },
+      origin: ({ headers }) => isAllowedOrigin(headers.get("origin")),
       credentials: true,
       methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization", "X-XSRF-TOKEN"],
-    })
+    }),
   )
   .onAfterHandle(({ request, set }) => {
-    const o = request.headers.get("origin");
-    if (o) {
-      set.headers["Access-Control-Allow-Origin"] = o; // สะท้อน origin
-      set.headers["Access-Control-Allow-Credentials"] = "true";
-    }
-    set.headers["Content-Security-Policy"] =
-      "default-src 'self'; connect-src 'self' https://backend-restaurant-deploy.onrender.com https://frontend-restaurant-97nb.vercel.app";
+    applyCorsHeaders(request, set);
+    set.headers["Content-Security-Policy"] = csp;
   })
-  .onError(({ code, error, set }) => {
+  .onError(({ code, error, request, set }) => {
+    applyCorsHeaders(request, set);
+    set.headers["Content-Security-Policy"] = csp;
+
     if (code === "VALIDATION") {
       set.status = error.status;
       return {
         status: "error",
         message: "Validation failed",
-        // error.all จะบอกรายละเอียดทั้งหมดว่า field ไหนผิด
         errors: error.all,
       };
     }
+
     if (code === "NOT_FOUND") {
       set.status = 400;
       return {
@@ -61,27 +69,41 @@ app
         message: "Not found page",
       };
     }
+
+    set.status = 500;
+    console.error(error);
+    return {
+      status: "error",
+      message: (error as Error).message || "Internal server error",
+    };
   })
   .use(elysiaHelmet({}))
-
+  .use(
+    rateLimit({
+      duration: 60000,
+      max: 100,
+      generator: (req, server) =>
+        server?.requestIP(req)?.address ??
+        req.headers.get("x-forwarded-for") ??
+        "unknown",
+    }),
+  )
   .use(
     jwt({
       name: "jwt",
       secret: jwtsecret,
-    })
+    }),
   )
-
-  /* ④ เส้นทางจริง */
   .get("/", () => "Hello Elysia")
   .use(profilerouter)
   .use(middlewareadmin)
   .use(Tablerouter)
   .use(Adminrouter)
   .use(Auths)
+  .use(RestaurantRouter)
   .use(menurouter)
   .use(Orderrouter)
   .use(web)
-
   .listen({ port, hostname: "0.0.0.0" });
 
-console.log(`🦊  Elysia is running at 0.0.0.0:${port}`);
+console.log(`Elysia is running at 0.0.0.0:${port}`);

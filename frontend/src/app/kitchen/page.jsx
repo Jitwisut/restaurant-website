@@ -1,543 +1,306 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
-import axios from "axios";
-
-/* -------------------- Constants -------------------- */
-const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL;
-const WS_BASE = process.env.NEXT_PUBLIC_API_WS;
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { buildWsUrl } from "@/lib/api";
+import { useRestaurantAccess } from "../components/useRestaurantAccess";
 
 export default function KitchenDashboard() {
-  /* Identity & State */
-  const [profile, setProfile] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  /* Audio Management */
-  const audioRef = useRef(null);
-  const [audioReady, setAudioReady] = useState(false);
-  const pendingPlays = useRef(0);
-
-  /* WebSocket & Queue */
+  const { auth, ready, allowed } = useRestaurantAccess([
+    "kitchen",
+    "superadmin",
+  ]);
+  const wsRef = useRef(null);
+  const pingRef = useRef(null);
+  const retryRef = useRef(null);
   const [connected, setConnected] = useState(false);
   const [queue, setQueue] = useState([]);
-  const wsRef = useRef(null);
-  const pingRef = useRef();
-  const retryRef = useRef({ attempts: 0, timer: null });
+  const [error, setError] = useState("");
 
-  /* -------------------- Audio System -------------------- */
-  useEffect(() => {
-    if (!audioRef.current) {
-      audioRef.current = new Audio("/sounds/notification.mp3");
-      audioRef.current.volume = 0.7;
-      audioRef.current.preload = "auto";
-    }
-  }, []);
-
-  const playNotificationSound = useCallback(() => {
-    if (audioReady && audioRef.current) {
-      audioRef.current.currentTime = 0;
-      audioRef.current
-        .play()
-        .then(() => {
-          console.log("🔊 เล่นเสียงแจ้งเตือนสำเร็จ");
-        })
-        .catch((error) => {
-          console.error("❌ ไม่สามารถเล่นเสียงได้:", error);
-        });
-    } else {
-      pendingPlays.current++;
-      console.warn("⏳ เสียงยังไม่พร้อม เพิ่มเข้าคิว:", pendingPlays.current);
-    }
-  }, [audioReady]);
-
-  const unlockAudio = useCallback(() => {
-    if (!audioRef.current || audioReady) return;
-
-    audioRef.current
-      .play()
-      .then(() => {
-        audioRef.current.pause();
-        audioRef.current.currentTime = 0;
-        setAudioReady(true);
-        console.log("🔓 เสียงปลดล็อกสำเร็จแล้ว!");
-
-        // เล่นเสียงที่รอคิวอยู่
-        while (pendingPlays.current > 0) {
-          setTimeout(() => {
-            audioRef.current?.play().catch(console.error);
-          }, 100);
-          pendingPlays.current--;
-        }
-      })
-      .catch((error) => {
-        console.error("❌ ไม่สามารถปลดล็อกเสียงได้:", error);
-      });
-  }, [audioReady]);
-
-  useEffect(() => {
-    if (!audioReady) {
-      const handleUserInteraction = () => {
-        unlockAudio();
-        document.removeEventListener("click", handleUserInteraction);
-        document.removeEventListener("touchstart", handleUserInteraction);
-      };
-
-      document.addEventListener("click", handleUserInteraction);
-      document.addEventListener("touchstart", handleUserInteraction);
-
-      return () => {
-        document.removeEventListener("click", handleUserInteraction);
-        document.removeEventListener("touchstart", handleUserInteraction);
-      };
-    }
-  }, [unlockAudio, audioReady]);
-
-  /* -------------------- Profile Management -------------------- */
-  const loadProfile = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-
-      // ลองอ่านจาก sessionStorage ก่อน
-      const cached = sessionStorage.getItem("kitchenProfile");
-      if (cached) {
-        try {
-          const parsedProfile = JSON.parse(cached);
-          setProfile(parsedProfile);
-          setLoading(false);
-          return;
-        } catch (parseError) {
-          console.warn("⚠️ ไม่สามารถแปลงข้อมูล cached profile:", parseError);
-        }
-      }
-
-      // ลองดึงจาก API
-      const token = sessionStorage.getItem("kitchenProfile");
-      if (token) {
-        try {
-          const response = await axios.get(
-            `${API_BASE}/profile/kitchenprofile`,
-            {
-              headers: {
-                Authorization: `Bearer ${token}`,
-                "Content-Type": "application/json",
-              },
-              timeout: 10000,
-            }
-          );
-
-          const profileData = {
-            username: response.data.username,
-            role: response.data.role,
-            wsToken: response.data.wsToken,
-            id: response.data.id,
-          };
-
-          sessionStorage.setItem("kitchenProfile", JSON.stringify(profileData));
-          setProfile(profileData);
-          return;
-        } catch (apiError) {
-          console.warn(
-            "⚠️ ไม่สามารถดึงข้อมูล profile จาก API:",
-            apiError.message
-          );
-        }
-      }
-
-      // ถ้าไม่สำเร็จทั้งสองวิธี ให้ prompt ผู้ใช้
-      const kitchenName = prompt("กรุณาใส่ชื่อครัว (เช่น kitchen1):")?.trim();
-      if (!kitchenName) {
-        throw new Error("ไม่ได้ระบุชื่อครัว");
-      }
-
-      const manualProfile = {
-        username: kitchenName,
-        role: "kitchen",
-        id: Date.now().toString(),
-      };
-
-      sessionStorage.setItem("kitchenProfile", JSON.stringify(manualProfile));
-      setProfile(manualProfile);
-    } catch (err) {
-      setError(err.message || "เกิดข้อผิดพลาดในการโหลดข้อมูลครัว");
-      console.error("❌ Load profile error:", err);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadProfile();
-  }, [loadProfile]);
-
-  /* -------------------- WebSocket Management -------------------- */
   const connect = useCallback(() => {
-    if (!profile) {
-      console.warn("⚠️ ไม่สามารถเชื่อมต่อได้ เพราะยังไม่มี profile");
-      return;
-    }
+    if (!auth?.username || !auth?.token) return;
 
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      console.log("✅ WebSocket เชื่อมต่อแล้ว");
-      return;
-    }
-
-    const wsUrl =
-      `${WS_BASE}/ws/${encodeURIComponent(
-        profile.username
-      )}?role=${encodeURIComponent(profile.role)}` +
-      (profile.wsToken ? `&token=${encodeURIComponent(profile.wsToken)}` : "");
-
-    console.log(
-      "🔌 กำลังเชื่อมต่อ WebSocket:",
-      wsUrl.replace(/token=[^&]+/, "token=***")
+    const socket = new WebSocket(
+      buildWsUrl(`/ws/${encodeURIComponent(auth.username)}?role=kitchen`, auth.token),
     );
+    wsRef.current = socket;
 
-    try {
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        console.log("✅ WebSocket เชื่อมต่อสำเร็จ");
-        setConnected(true);
-        setError(null);
-        retryRef.current.attempts = 0;
-
-        // เริ่ม ping เพื่อรักษาการเชื่อมต่อ
-        pingRef.current = setInterval(() => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "ping", timestamp: Date.now() }));
-          }
-        }, 30000);
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          console.log("📨 ได้รับข้อความ:", data);
-
-          if (data.type === "order") {
-            playNotificationSound();
-
-            const newOrder = {
-              orderId: data.orderId || `order_${Date.now()}`,
-              items: data.menu?.items || data.items || [],
-              tableNumber: data.table_number,
-              timestamp: new Date().toLocaleTimeString("th-TH"),
-              status: "pending",
-            };
-
-            setQueue((prevQueue) => {
-              // ตรวจสอบไม่ให้ duplicate
-              const exists = prevQueue.some(
-                (order) => order.orderId === newOrder.orderId
-              );
-              if (exists) {
-                console.warn("⚠️ Order ซ้ำ:", newOrder.orderId);
-                return prevQueue;
-              }
-              return [...prevQueue, newOrder];
-            });
-          } else if (data.type === "pong") {
-            console.log("🏓 Pong received");
-          } else if (data.type === "error") {
-            console.error("❌ Server error:", data.message);
-            setError(data.message);
-          } else {
-            console.log("ℹ️ System message:", data);
-          }
-        } catch (parseError) {
-          console.error(
-            "❌ ไม่สามารถแปลง JSON:",
-            parseError,
-            "Raw:",
-            event.data
-          );
+    socket.onopen = () => {
+      setConnected(true);
+      setError("");
+      pingRef.current = setInterval(() => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "ping" }));
         }
-      };
+      }, 30000);
+    };
 
-      ws.onerror = (error) => {
-        console.error("❌ WebSocket error:", error);
-        setError("เกิดข้อผิดพลาดในการเชื่อมต่อ");
-      };
-
-      ws.onclose = (event) => {
-        console.log("🔌 WebSocket ปิดการเชื่อมต่อ:", event.code, event.reason);
-        setConnected(false);
-        clearInterval(pingRef.current);
-
-        // Auto-reconnect with exponential backoff
-        if (retryRef.current.attempts < 10) {
-          const delay = Math.min(
-            Math.pow(2, retryRef.current.attempts) * 1000,
-            30000
-          );
-          retryRef.current.attempts += 1;
-
-          console.log(
-            `🔄 จะลองเชื่อมต่อใหม่ในอีก ${delay}ms (ครั้งที่ ${retryRef.current.attempts})`
-          );
-
-          retryRef.current.timer = setTimeout(() => {
-            connect();
-          }, delay);
-        } else {
-          setError("ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้ กรุณาโหลดหน้าใหม่");
+    socket.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === "order") {
+          setQueue((current) => {
+            const exists = current.some((item) => item.orderId === data.order_id);
+            if (exists) return current;
+            return [
+              ...current,
+              {
+                orderId: data.order_id,
+                from: data.from,
+                items: data.menu?.items || [],
+                tableNumber: data.table_number,
+                status: "pending",
+                timestamp: new Date().toLocaleTimeString("th-TH"),
+                elapsed: "00:00", // Would need a timer hook in a real app
+              },
+            ];
+          });
         }
-      };
-    } catch (connectionError) {
-      console.error("❌ ไม่สามารถสร้าง WebSocket:", connectionError);
-      setError("ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้");
-    }
-  }, [profile, playNotificationSound]);
+      } catch {
+        // ignore malformed ws messages
+      }
+    };
+
+    socket.onerror = () => setError("เชื่อมต่อครัวไม่สำเร็จ");
+    socket.onclose = () => {
+      setConnected(false);
+      if (pingRef.current) clearInterval(pingRef.current);
+      retryRef.current = setTimeout(connect, 3000);
+    };
+  }, [auth?.token, auth?.username]);
 
   useEffect(() => {
-    if (profile) {
+    if (ready && allowed) {
       connect();
     }
 
     return () => {
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
-      clearInterval(pingRef.current);
-      clearTimeout(retryRef.current.timer);
+      if (retryRef.current) clearTimeout(retryRef.current);
+      if (pingRef.current) clearInterval(pingRef.current);
+      if (wsRef.current) wsRef.current.close();
     };
-  }, [connect]);
+  }, [allowed, connect, ready]);
 
-  /* -------------------- Order Management -------------------- */
-  const sendStatus = useCallback(
-    async (orderId, status) => {
-      try {
-        const ws = wsRef.current;
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          // อัพเดทสถานะใน state
-          setQueue((prevQueue) => {
-            if (status === "done") {
-              
-              return prevQueue.filter((order) => order.orderId !== orderId);
-            } else {
-              return prevQueue.map((order) =>
-                order.orderId === orderId ? { ...order, status } : order
-              );
-            }
-          });
-        } else {
-          throw new Error("ไม่ได้เชื่อมต่อกับเซิร์ฟเวอร์");
-        }
-      } catch (err) {
-        console.error("❌ ส่งสถานะไม่สำเร็จ:", err);
-        setError("ไม่สามารถส่งสถานะได้ กรุณาลองใหม่");
+  const sendStatus = useCallback((orderId, status) => {
+    const socket = wsRef.current;
+    const targetOrder = queue.find((item) => item.orderId === orderId);
+    if (!socket || socket.readyState !== WebSocket.OPEN || !targetOrder?.from) {
+      setError("ส่งสถานะไม่สำเร็จ");
+      return;
+    }
 
-        // แสดง error แป้บเดียวแล้วหาย
-        setTimeout(() => setError(null), 3000);
-      }
-    },
-    [profile]
+    socket.send(
+      JSON.stringify({
+        type: "order_status",
+        to: targetOrder.from,
+        order_id: orderId,
+        status,
+      }),
+    );
+
+    setQueue((current) =>
+      status === "ready" || status === "done"
+        ? current.filter((item) => item.orderId !== orderId)
+        : current.map((item) =>
+            item.orderId === orderId ? { ...item, status } : item,
+          ),
+    );
+  }, [queue]);
+
+  const title = useMemo(
+    () => auth?.restaurantName || auth?.restaurantSlug || "Kitchen",
+    [auth?.restaurantName, auth?.restaurantSlug],
   );
 
-  const clearQueue = useCallback(() => {
-    if (confirm("ต้องการเคลียร์คิวทั้งหมดใช่หรือไม่?")) {
-      setQueue([]);
-      console.log("🗑️ เคลียร์คิวทั้งหมด");
-    }
-  }, []);
+  const pendingCount = queue.filter(o => o.status === "pending").length;
+  const cookingCount = queue.filter(o => o.status === "preparing").length;
 
-  const refreshConnection = useCallback(() => {
-    if (wsRef.current) {
-      wsRef.current.close();
-    }
-    clearTimeout(retryRef.current.timer);
-    retryRef.current.attempts = 0;
-    setTimeout(connect, 1000);
-  }, [connect]);
-
-  /* -------------------- UI Render -------------------- */
-  if (loading) {
+  if (!ready || (auth?.token && !allowed)) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">กำลังโหลดข้อมูลครัว...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!profile) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center p-6">
-          <p className="text-red-600 text-xl mb-4">
-            ❌ ไม่สามารถระบุตัวครัวได้
-          </p>
-          <button
-            onClick={loadProfile}
-            className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-          >
-            ลองใหม่
-          </button>
-        </div>
+      <div className="min-h-screen bg-surface flex items-center justify-center">
+        <p className="text-on-surface-variant font-body-lg">กำลังโหลดครัว...</p>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4 md:p-6">
-      {/* Header */}
-      <header className="bg-white rounded-lg shadow-sm p-4 mb-6">
-        <div className="flex items-center justify-between flex-wrap gap-4">
-          <div className="flex items-center gap-4">
-            <h1 className="text-2xl font-bold text-gray-800">
-              🍽️ Kitchen Dashboard
-            </h1>
-            <span className="text-gray-600">{profile.username}</span>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <span
-              className={`px-3 py-1 rounded-full text-sm font-medium ${
-                connected
-                  ? "bg-green-100 text-green-800"
-                  : "bg-red-100 text-red-800"
-              }`}
-            >
-              {connected ? "🟢 Online" : "🔴 Offline"}
-            </span>
-
-            {!connected && (
-              <button
-                onClick={refreshConnection}
-                className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700 transition-colors"
-              >
-                🔄 เชื่อมต่อใหม่
-              </button>
-            )}
-
-            {queue.length > 0 && (
-              <button
-                onClick={clearQueue}
-                className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-red-700 transition-colors"
-              >
-                🗑️ เคลียร์คิว
-              </button>
-            )}
-          </div>
+    <div className="bg-background text-on-background font-body-md min-h-screen flex flex-col md:flex-row">
+      {/* SideNavBar (Web Only) - Mocked for Kitchen role */}
+      <nav className="hidden md:flex flex-col h-screen w-64 border-r fixed left-0 top-0 border-outline-variant shadow-sm bg-surface-container-lowest py-6 z-50">
+        <div className="px-6 mb-8">
+          <h1 className="text-lg font-black text-primary-container">{title}</h1>
+          <p className="font-body-sm text-secondary">Kitchen Terminal</p>
         </div>
+        <ul className="flex-1 space-y-2 px-2 overflow-y-auto">
+          <li>
+            <a className="flex items-center gap-3 px-4 py-3 rounded-lg bg-secondary-container text-on-secondary-container border-r-4 border-primary transition-all duration-200 ease-in-out font-label-md" href="#">
+              <span className="material-symbols-outlined" style={{fontVariationSettings: "'FILL' 1"}}>local_dining</span>
+              Kitchen Queue
+            </a>
+          </li>
+          <li>
+             <a className="flex items-center gap-3 px-4 py-3 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-all duration-200 ease-in-out font-label-md" href="#">
+               <span className="material-symbols-outlined">inventory_2</span>
+               Ingredients
+             </a>
+          </li>
+        </ul>
+        <div className="mt-auto px-2 space-y-2 pt-4 border-t border-outline-variant">
+           <a className="flex items-center gap-3 px-4 py-3 rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-all duration-200 ease-in-out font-label-md" href="#">
+               <span className="material-symbols-outlined">logout</span>
+               Logout
+           </a>
+        </div>
+      </nav>
 
-        {/* Audio Status */}
-        {!audioReady && (
-          <div className="mt-3 p-3 bg-yellow-100 border border-yellow-300 rounded-lg">
-            <p className="text-yellow-800 text-sm">
-              🔊 กรุณาแตะหน้าจอเพื่อเปิดใช้งานเสียงแจ้งเตือน
-            </p>
-          </div>
-        )}
-
-        {/* Error Display */}
-        {error && (
-          <div className="mt-3 p-3 bg-red-100 border border-red-300 rounded-lg">
-            <p className="text-red-800 text-sm">❌ {error}</p>
-          </div>
-        )}
-      </header>
-
-      {/* Queue Status */}
-      <div className="mb-6">
-        <div className="bg-white rounded-lg shadow-sm p-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-gray-800">
-              📋 คิวปัจจุบัน ({queue.length} รายการ)
-            </h2>
-            {queue.length > 0 && (
-              <span className="text-sm text-gray-500">
-                อัพเดทล่าสุด: {new Date().toLocaleTimeString("th-TH")}
+      {/* Main Content Area */}
+      <main className="flex-1 md:ml-64 flex flex-col min-h-screen w-full">
+        {/* TopAppBar (Mobile & Web) */}
+        <header className="flex justify-between items-center h-16 px-8 sticky top-0 z-40 bg-surface-container-lowest docked full-width top-0 border-b border-outline-variant shadow-[0_12px_12px_rgba(45,62,97,0.04)] font-sans text-sm antialiased text-on-surface">
+          <div className="flex items-center gap-4">
+            <button className="md:hidden p-2 -ml-2 rounded-lg hover:bg-surface-container-high transition-colors text-on-surface-variant">
+              <span className="material-symbols-outlined">menu</span>
+            </button>
+            <div className="flex items-center gap-2">
+              <span className="text-xl font-bold text-primary-container dark:text-inverse-primary">Kitchen Display</span>
+              <span className={`hidden sm:inline-flex px-2 py-0.5 rounded-full items-center text-xs font-semibold ml-2 border ${
+                  connected
+                    ? "bg-emerald-100/50 text-emerald-700 border-emerald-200"
+                    : "bg-error-container text-on-error-container border-error"
+                }`}>
+                {connected && <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1 animate-pulse"></span>}
+                {connected ? "Live Connection" : "Disconnected"}
               </span>
+            </div>
+          </div>
+          <div className="flex items-center gap-4">
+             {error && <span className="text-error font-label-sm">{error}</span>}
+            <button className="p-2 rounded-lg hover:bg-surface-container-high text-on-surface-variant transition-colors active:scale-95 transition-transform relative">
+              <span className="material-symbols-outlined">notifications</span>
+              {queue.length > 0 && <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-error"></span>}
+            </button>
+             <div className="w-8 h-8 rounded-full bg-surface-container-high border border-outline-variant overflow-hidden flex-shrink-0 ml-2 flex items-center justify-center text-primary-container font-bold">
+               K
+             </div>
+          </div>
+        </header>
+
+        {/* Dashboard Canvas */}
+        <div className="flex-1 p-md lg:p-margin pb-24 md:pb-margin overflow-y-auto bg-surface-container-low">
+          {/* Page Header */}
+          <div className="mb-gutter flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+            <div>
+              <h2 className="font-h1 text-on-surface mb-1">Kitchen Display System</h2>
+              <p className="font-body-sm text-secondary">Real-time order fulfillment queue.</p>
+            </div>
+            <div className="flex gap-2">
+              <button className="px-4 py-2 rounded-lg bg-surface border border-outline-variant text-on-surface font-label-md hover:bg-surface-container transition-colors flex items-center gap-2">
+                <span className="material-symbols-outlined text-[18px]">filter_list</span>
+                Filter
+              </button>
+            </div>
+          </div>
+
+          {/* Stats Row */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-md mb-gutter">
+            <div className="bg-surface rounded-xl p-md border border-outline-variant shadow-[0_4px_12px_rgba(45,62,97,0.04)] flex flex-col">
+              <span className="font-label-sm text-secondary uppercase tracking-wider mb-2">Pending</span>
+              <span className="font-display text-on-surface">{pendingCount}</span>
+            </div>
+            <div className="bg-surface rounded-xl p-md border border-outline-variant shadow-[0_4px_12px_rgba(45,62,97,0.04)] flex flex-col">
+              <span className="font-label-sm text-secondary uppercase tracking-wider mb-2">Cooking</span>
+              <span className="font-display text-primary-container">{cookingCount}</span>
+            </div>
+            <div className="bg-surface rounded-xl p-md border border-outline-variant shadow-[0_4px_12px_rgba(45,62,97,0.04)] flex flex-col">
+              <span className="font-label-sm text-secondary uppercase tracking-wider mb-2">Ready</span>
+              <span className="font-display text-emerald-700">0</span>
+            </div>
+            <div className="bg-surface rounded-xl p-md border border-outline-variant shadow-[0_4px_12px_rgba(45,62,97,0.04)] flex flex-col">
+              <span className="font-label-sm text-secondary uppercase tracking-wider mb-2">Avg Prep Time</span>
+              <span className="font-display text-on-surface">-</span>
+            </div>
+          </div>
+
+          {/* Orders Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-md">
+            {queue.length === 0 ? (
+               <div className="col-span-full py-12 text-center text-on-surface-variant font-body-lg">
+                  ยังไม่มีออเดอร์ในคิว
+               </div>
+            ) : (
+                queue.map((order) => {
+                    const isPending = order.status === 'pending';
+                    const isCooking = order.status === 'preparing';
+
+                    return (
+                      <div key={order.orderId} className={`bg-surface rounded-xl border border-outline-variant shadow-[0_4px_12px_rgba(45,62,97,0.04)] overflow-hidden flex flex-col relative ${isPending ? 'border-l-4 border-l-error border-y border-r' : ''}`}>
+                        {isCooking && (
+                             <div className="absolute top-0 left-0 h-1 bg-primary-fixed w-full">
+                               <div className="h-full bg-primary-container w-2/3 animate-pulse"></div>
+                             </div>
+                        )}
+                        <div className={`p-4 border-b border-outline-variant bg-surface-bright flex justify-between items-start ${isCooking ? 'mt-1' : ''}`}>
+                          <div>
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="font-h3 text-on-surface">Order #{order.orderId.slice(-4)}</span>
+                               {/* Mocking a VIP tag for the first pending order for visual flair like the HTML */}
+                               {isPending && queue.indexOf(order) === 0 && (
+                                  <span className="px-2 py-0.5 rounded-full bg-error-container text-on-error-container font-label-sm">NEW</span>
+                               )}
+                            </div>
+                            <span className="font-body-sm text-secondary">Table {order.tableNumber}</span>
+                          </div>
+                          <div className="text-right">
+                             <span className={`block font-h3 ${isPending ? 'text-error' : 'text-on-surface'}`}>{order.elapsed || order.timestamp}</span>
+                             <span className="font-label-sm text-secondary">{order.elapsed ? 'Elapsed' : 'Time'}</span>
+                          </div>
+                        </div>
+
+                        <div className="p-4 flex-1">
+                          <ul className="space-y-3 font-body-md text-on-surface">
+                            {order.items.map((item, index) => (
+                              <li key={index} className="flex items-start gap-3">
+                                <span className={`font-semibold w-6 shrink-0 ${isCooking ? 'text-primary-container' : ''}`}>{item.qty || 1}x</span>
+                                <div>
+                                  <span className="block font-medium">{item.name || item.menu_name || "Menu item"}</span>
+                                  {item.note && <span className="block font-body-sm text-secondary mt-0.5">{item.note}</span>}
+                                </div>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+
+                        <div className="p-4 bg-surface-container-lowest border-t border-outline-variant mt-auto">
+                            {isPending ? (
+                                <button
+                                    onClick={() => sendStatus(order.orderId, "preparing")}
+                                    className="w-full bg-primary-container text-on-primary font-label-md py-3 rounded-lg hover:bg-surface-tint transition-colors flex items-center justify-center gap-2"
+                                >
+                                  <span className="material-symbols-outlined text-[20px]">local_fire_department</span>
+                                  Start Cooking
+                                </button>
+                            ) : (
+                                <div className="flex gap-2">
+                                     <button className="flex-1 bg-surface border border-outline-variant text-on-surface font-label-md py-3 rounded-lg hover:bg-surface-container transition-colors flex items-center justify-center gap-2">
+                                         <span className="material-symbols-outlined text-[20px]">print</span>
+                                         Ticket
+                                     </button>
+                                     <button
+                                         onClick={() => sendStatus(order.orderId, "ready")}
+                                         className="flex-[2] bg-emerald-600 text-white font-label-md py-3 rounded-lg hover:bg-emerald-700 transition-colors flex items-center justify-center gap-2"
+                                     >
+                                        <span className="material-symbols-outlined text-[20px]">check_circle</span>
+                                        Mark as Ready
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                      </div>
+                    );
+                })
             )}
           </div>
         </div>
-      </div>
-
-      {/* Orders Queue */}
-      {queue.length === 0 ? (
-        <div className="text-center py-16">
-          <div className="text-6xl mb-4">🍽️</div>
-          <p className="text-gray-500 text-xl">ยังไม่มีออร์เดอร์ในคิว</p>
-          <p className="text-gray-400 mt-2">รอรับออร์เดอร์จากลูกค้า...</p>
-        </div>
-      ) : (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {queue.map((order) => (
-            
-            <div
-              key={order.orderId}
-              className={`bg-white rounded-lg shadow-sm border-l-4 p-4 transition-all hover:shadow-md ${
-                order.status === "cooking"
-                  ? "border-l-yellow-400"
-                  : "border-l-blue-400"
-              }`}
-            >
-              
-              {/* Order Header */}
-              <div className="flex justify-between items-start mb-3">
-                <div>
-                  <h3 className="font-bold text-lg text-gray-800">
-                    
-                    🪑 โต๊ะ {order.tableNumber}
-                  </h3>
-                  <p className="text-sm text-gray-500">
-                    {order.timestamp} • {order.orderId.slice(-6)}
-                  </p>
-                </div>
-                {order.status === "cooking" && (
-                  <span className="bg-yellow-100 text-yellow-800 px-2 py-1 rounded-full text-xs font-medium">
-                    🍳 กำลังทำ
-                  </span>
-                )}
-              </div>
-
-              {/* Order Items */}
-              <div className="space-y-2 mb-4">
-                {order.items.map((item, index) => (
-                  <div
-                    key={`${item.id || index}`}
-                    className="flex justify-between items-center bg-gray-50 rounded-lg p-2"
-                  >
-                    <span className="text-gray-800 font-medium">
-                      {item.name || item.menu_name || "ไม่ระบุชื่อเมนู"}
-                    </span>
-                    <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded-full text-sm font-medium">
-                      x{item.qty || item.quantity || 1}
-                    </span>
-                  </div>
-                ))}
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex gap-2">
-                <button
-                  onClick={() => sendStatus(order.orderId, "cooking")}
-                  disabled={order.status === "cooking"}
-                  className={`flex-1 px-4 py-2 rounded-lg font-medium text-sm transition-colors ${
-                    order.status === "cooking"
-                      ? "bg-gray-200 text-gray-500 cursor-not-allowed"
-                      : "bg-yellow-400 hover:bg-yellow-500 text-yellow-900"
-                  }`}
-                >
-                  🍳 {order.status === "cooking" ? "กำลังทำ" : "เริ่มทำ"}
-                </button>
-                <button
-                  onClick={() => sendStatus(order.orderId, "done")}
-                  className="flex-1 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition-colors"
-                >
-                  ✅ เสร็จแล้ว
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+      </main>
     </div>
   );
 }

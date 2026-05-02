@@ -1,5 +1,6 @@
 "use client";
 import { motion, AnimatePresence } from "framer-motion";
+import { createPortal } from "react-dom";
 import {
     ShoppingCart,
     Plus,
@@ -22,7 +23,7 @@ export default function CartModal({
     isOnline,
     wsStatus,
 }) {
-    return (
+    const modal = (
         <AnimatePresence>
             {isOpen && (
                 <>
@@ -32,7 +33,7 @@ export default function CartModal({
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
                         onClick={onClose}
-                        className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50"
+                        className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[9998]"
                     />
 
                     {/* Modal */}
@@ -41,7 +42,12 @@ export default function CartModal({
                         animate={{ opacity: 1, scale: 1, y: 0 }}
                         exit={{ opacity: 0, scale: 0.95, y: 20 }}
                         transition={{ type: "spring", duration: 0.5 }}
-                        className="fixed inset-x-4 top-20 bottom-20 md:inset-auto md:top-1/2 md:left-1/2 md:-translate-x-1/2 md:-translate-y-1/2 md:w-full md:max-w-md md:h-auto md:max-h-[80vh] bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl z-50 overflow-hidden border border-white/50"
+                        className="app-modal-card fixed left-1/2 top-1/2 z-[9999] -translate-x-1/2 -translate-y-1/2 bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl overflow-hidden border border-white/50"
+                        style={{
+                            "--app-modal-width": "448px",
+                            width: "min(448px, calc(100vw - 48px))",
+                            maxHeight: "calc(100vh - 48px)",
+                        }}
                     >
                         {/* Header */}
                         <div className="bg-gradient-to-r from-red-500 to-red-400  p-4 md:p-6 flex items-center justify-between">
@@ -222,4 +228,7 @@ export default function CartModal({
             )}
         </AnimatePresence>
     );
+
+    if (typeof document === "undefined") return null;
+    return createPortal(modal, document.body);
 }

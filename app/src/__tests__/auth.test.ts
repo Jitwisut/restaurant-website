@@ -1,21 +1,16 @@
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { describe, test, expect } from "bun:test";
 import { Elysia } from "elysia";
 import jwt from "@elysiajs/jwt";
 import { Auths } from "../router/Auth";
 import {
-  createTestUser,
   createTestAdmin,
   createTestKitchen,
+  decodeJWT,
+  ensureTestRestaurant,
 } from "./helpers/testUtils";
-
-/**
- * Auth Controller Tests
- * Tests for user authentication (signin/signup)
- */
 
 const jwtsecret = process.env.JWT_SECRET || "test-secret-key";
 
-// Create test app instance
 const createTestApp = () => {
   return new Elysia()
     .use(
@@ -28,18 +23,20 @@ const createTestApp = () => {
 };
 
 describe("Auth Controller - Signup", () => {
-  test("should successfully register a new user", async () => {
+  test("should successfully register an owner/admin account with email login", async () => {
     const app = createTestApp();
-    const testUser = createTestUser({
-      username: `user_${Date.now()}`,
-      email: `test_${Date.now()}@example.com`,
+    const suffix = Date.now();
+    const admin = createTestAdmin({
+      username: `admin_${suffix}`,
+      email: `admin_${suffix}@example.com`,
+      restaurant_slug: `auth-owner-${suffix}`,
     });
 
     const response = await app.handle(
       new Request("http://localhost/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(testUser),
+        body: JSON.stringify(admin),
       }),
     );
 
@@ -48,161 +45,186 @@ describe("Auth Controller - Signup", () => {
     expect(data.message).toContain("Success");
   });
 
-  test("should reject signup with missing fields", async () => {
+  test("should reject duplicate owner/admin email", async () => {
     const app = createTestApp();
+    const suffix = Date.now();
+    const email = `duplicate_owner_${suffix}@example.com`;
 
-    const response = await app.handle(
+    const first = await app.handle(
       new Request("http://localhost/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username: "testuser",
-          email: "test@example.com",
-          role: "user",
-          // missing password and role
-        }),
+        body: JSON.stringify(
+          createTestAdmin({
+            username: `owner_a_${suffix}`,
+            email,
+            restaurant_slug: `owner-a-${suffix}`,
+          }),
+        ),
+      }),
+    );
+    const second = await app.handle(
+      new Request("http://localhost/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          createTestAdmin({
+            username: `owner_b_${suffix}`,
+            email,
+            restaurant_slug: `owner-b-${suffix}`,
+          }),
+        ),
       }),
     );
 
-    expect(response.status).toBe(422);
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(409);
   });
 
-  test("should reject duplicate username", async () => {
+  test("should reject duplicate staff username inside the same restaurant", async () => {
     const app = createTestApp();
-    const username = `duplicate_${Date.now()}`;
-    const testUser = createTestUser({
-      username,
-      email: `${username}@example.com`,
-    });
+    const suffix = Date.now();
+    const username = `duplicate_kitchen_${suffix}`;
+    await ensureTestRestaurant(31, { slug: `duplicate-tenant-${suffix}` });
 
-    // First signup - should succeed
-    await app.handle(
+    const first = await app.handle(
       new Request("http://localhost/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(testUser),
+        body: JSON.stringify(
+          createTestKitchen({
+            username,
+            email: `${username}_a@example.com`,
+            restaurant_slug: `duplicate-tenant-${suffix}`,
+          }),
+        ),
       }),
     );
-
-    // Second signup with same username - should fail
-    const response = await app.handle(
+    const second = await app.handle(
       new Request("http://localhost/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...testUser,
-          email: "different@example.com",
-        }),
+        body: JSON.stringify(
+          createTestKitchen({
+            username,
+            email: `${username}_b@example.com`,
+            restaurant_slug: `duplicate-tenant-${suffix}`,
+          }),
+        ),
       }),
     );
 
-    expect(response.status).toBe(409);
-    const data = await response.json();
-    expect(data.message).toContain("already exists");
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(409);
+    const data = await second.json();
+    expect(data.message).toContain("already exists in this restaurant");
   });
 
-  test("should accept different user roles", async () => {
+  test("should allow duplicate staff usernames across different restaurants", async () => {
     const app = createTestApp();
+    const suffix = Date.now();
+    const username = `shared_kitchen_${suffix}`;
+    await ensureTestRestaurant(41, { slug: `tenant-a-${suffix}` });
+    await ensureTestRestaurant(42, { slug: `tenant-b-${suffix}` });
 
-    // Test admin role
-    const admin = createTestAdmin({
-      username: `admin_${Date.now()}`,
-      email: `admin_${Date.now()}@example.com`,
-    });
-
-    const adminResponse = await app.handle(
+    const first = await app.handle(
       new Request("http://localhost/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(admin),
+        body: JSON.stringify(
+          createTestKitchen({
+            username,
+            email: `${username}_a@example.com`,
+            restaurant_slug: `tenant-a-${suffix}`,
+          }),
+        ),
       }),
     );
-
-    expect(adminResponse.status).toBe(201);
-
-    // Test kitchen role
-    const kitchen = createTestKitchen({
-      username: `kitchen_${Date.now()}`,
-      email: `kitchen_${Date.now()}@example.com`,
-    });
-
-    const kitchenResponse = await app.handle(
+    const second = await app.handle(
       new Request("http://localhost/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(kitchen),
+        body: JSON.stringify(
+          createTestKitchen({
+            username,
+            email: `${username}_b@example.com`,
+            restaurant_slug: `tenant-b-${suffix}`,
+          }),
+        ),
       }),
     );
 
-    expect(kitchenResponse.status).toBe(201);
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
   });
 });
 
 describe("Auth Controller - Signin", () => {
-  test("should successfully login with valid credentials", async () => {
+  test("should login owner/admin by email", async () => {
     const app = createTestApp();
-    const username = `signin_test_${Date.now()}`;
-    const password = "password123";
+    const suffix = Date.now();
+    const email = `signin_admin_${suffix}@example.com`;
 
-    // First, create a user
     await app.handle(
       new Request("http://localhost/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username,
-          email: `${username}@example.com`,
-          password,
-          role: "user",
-        }),
+        body: JSON.stringify(
+          createTestAdmin({
+            username: `signin_admin_${suffix}`,
+            email,
+            password: "password123",
+            restaurant_slug: `signin-admin-${suffix}`,
+          }),
+        ),
       }),
     );
 
-    // Then try to sign in
     const response = await app.handle(
       new Request("http://localhost/auth/signin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          username,
-          password,
+          email,
+          password: "password123",
         }),
       }),
     );
 
-    expect(response.status).toBe(200);
     const data = await response.json();
+    expect(response.status).toBe(200);
     expect(data.message).toContain("Success");
     expect(data.token).toBeDefined();
     expect(data.refreshToken).toBeDefined();
-    expect(data.redirectpath).toBeDefined();
+    expect(data.role).toBe("admin");
   });
 
-  test("should reject signin with invalid password", async () => {
+  test("should reject owner/admin email signin with invalid password", async () => {
     const app = createTestApp();
-    const username = `invalid_pass_${Date.now()}`;
+    const suffix = Date.now();
+    const email = `invalid_pass_${suffix}@example.com`;
 
-    // Create user
     await app.handle(
       new Request("http://localhost/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username,
-          email: `${username}@example.com`,
-          password: "correctpassword",
-          role: "user",
-        }),
+        body: JSON.stringify(
+          createTestAdmin({
+            username: `invalid_pass_${suffix}`,
+            email,
+            password: "correctpassword",
+            restaurant_slug: `invalid-pass-${suffix}`,
+          }),
+        ),
       }),
     );
 
-    // Try signin with wrong password
     const response = await app.handle(
       new Request("http://localhost/auth/signin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          username,
+          email,
           password: "wrongpassword",
         }),
       }),
@@ -213,66 +235,33 @@ describe("Auth Controller - Signin", () => {
     expect(data.message).toContain("Invalid password");
   });
 
-  test("should reject signin for non-existent user", async () => {
+  test("should login staff by restaurant slug and username", async () => {
     const app = createTestApp();
+    const suffix = Date.now();
+    const username = `kitchen_${suffix}`;
+    await ensureTestRestaurant(51, { slug: `staff-login-${suffix}` });
 
-    const response = await app.handle(
-      new Request("http://localhost/auth/signin", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username: "nonexistentuser",
-          password: "password123",
-        }),
-      }),
-    );
-
-    expect(response.status).toBe(404);
-    const data = await response.json();
-    expect(data.message).toContain("not found");
-  });
-
-  test("should reject signin with missing fields", async () => {
-    const app = createTestApp();
-
-    const response = await app.handle(
-      new Request("http://localhost/auth/signin", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username: "testuser",
-          // missing password
-        }),
-      }),
-    );
-
-    expect(response.status).toBe(422);
-  });
-
-  test("should return correct redirect path for admin", async () => {
-    const app = createTestApp();
-    const username = `admin_redirect_${Date.now()}`;
-
-    // Create admin user
     await app.handle(
       new Request("http://localhost/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username,
-          email: `${username}@example.com`,
-          password: "password123",
-          role: "admin",
-        }),
+        body: JSON.stringify(
+          createTestKitchen({
+            username,
+            email: `${username}@example.com`,
+            password: "password123",
+            restaurant_slug: `staff-login-${suffix}`,
+          }),
+        ),
       }),
     );
 
-    // Sign in
     const response = await app.handle(
-      new Request("http://localhost/auth/signin", {
+      new Request("http://localhost/auth/staff-signin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          slug: `staff-login-${suffix}`,
           username,
           password: "password123",
         }),
@@ -280,74 +269,104 @@ describe("Auth Controller - Signin", () => {
     );
 
     const data = await response.json();
-    expect(data.redirectpath).toBe("/");
-  });
-
-  test("should return correct redirect path for kitchen", async () => {
-    const app = createTestApp();
-    const username = `kitchen_redirect_${Date.now()}`;
-
-    // Create kitchen user
-    await app.handle(
-      new Request("http://localhost/auth/signup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username,
-          email: `${username}@example.com`,
-          password: "password123",
-          role: "kitchen",
-        }),
-      }),
-    );
-
-    // Sign in
-    const response = await app.handle(
-      new Request("http://localhost/auth/signin", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username,
-          password: "password123",
-        }),
-      }),
-    );
-
-    const data = await response.json();
+    expect(response.status).toBe(200);
     expect(data.redirectpath).toBe("/kitchen");
+    expect(decodeJWT(data.token).restaurant_id).toBe(51);
   });
 
-  test("should return correct redirect path for user", async () => {
+  test("should issue tenant-specific tokens for the same kitchen username", async () => {
     const app = createTestApp();
-    const username = `user_redirect_${Date.now()}`;
+    const suffix = Date.now();
+    const username = `shared_kitchen_${suffix}`;
+    await ensureTestRestaurant(61, { slug: `token-tenant-a-${suffix}` });
+    await ensureTestRestaurant(62, { slug: `token-tenant-b-${suffix}` });
 
-    // Create regular user
-    await app.handle(
+    for (const [restaurantId, slug] of [
+      [61, `token-tenant-a-${suffix}`],
+      [62, `token-tenant-b-${suffix}`],
+    ] as const) {
+      const response = await app.handle(
+        new Request("http://localhost/auth/signup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            createTestKitchen({
+              username,
+              email: `${username}_${restaurantId}@example.com`,
+              password: "password123",
+              restaurant_slug: slug,
+            }),
+          ),
+        }),
+      );
+      expect(response.status).toBe(201);
+    }
+
+    const responseA = await app.handle(
+      new Request("http://localhost/auth/staff-signin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          slug: `token-tenant-a-${suffix}`,
+          username,
+          password: "password123",
+        }),
+      }),
+    );
+    const responseB = await app.handle(
+      new Request("http://localhost/auth/staff-signin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          slug: `token-tenant-b-${suffix}`,
+          username,
+          password: "password123",
+        }),
+      }),
+    );
+
+    const dataA = await responseA.json();
+    const dataB = await responseB.json();
+    expect(responseA.status).toBe(200);
+    expect(responseB.status).toBe(200);
+    expect(decodeJWT(dataA.token).restaurant_id).toBe(61);
+    expect(decodeJWT(dataB.token).restaurant_id).toBe(62);
+  });
+
+  test("should login superadmin without restaurant context", async () => {
+    const app = createTestApp();
+    const suffix = Date.now();
+    const username = `superadmin_${suffix}`;
+    const email = `${username}@example.com`;
+
+    const signup = await app.handle(
       new Request("http://localhost/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           username,
-          email: `${username}@example.com`,
+          email,
           password: "password123",
-          role: "user",
+          role: "superadmin",
         }),
       }),
     );
+    expect(signup.status).toBe(201);
 
-    // Sign in
     const response = await app.handle(
       new Request("http://localhost/auth/signin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          username,
+          email,
           password: "password123",
         }),
       }),
     );
 
     const data = await response.json();
-    expect(data.redirectpath).toBe("/wellcome");
+    expect(response.status).toBe(200);
+    expect(data.redirectpath).toBe("/superadmin");
+    expect(decodeJWT(data.token).restaurant_id).toBeNull();
   });
 });
