@@ -12,6 +12,8 @@ import { web } from "./router/websocket";
 import { profilerouter } from "./router/Profilerouter";
 import { Orderrouter } from "./router/Orderrouter";
 import { RestaurantRouter } from "./router/RestaurantRouter";
+import { SuperAdminRouter } from "./router/SuperAdminRouter";
+import { ensureSalesSchema } from "./lib/connect";
 
 const port = Number(Bun.env.PORT || 4000);
 const jwtsecret = Bun.env.JWT_SECRET as string;
@@ -20,6 +22,8 @@ const url2 = Bun.env.ORIGIN_URL2;
 const app = new Elysia();
 const csp =
   "default-src 'self'; connect-src 'self' http://localhost:4000 ws://localhost:4000 https://backend-restaurant-deploy.onrender.com https://frontend-restaurant-97nb.vercel.app";
+
+await ensureSalesSchema();
 
 function isAllowedOrigin(origin: string | null) {
   if (!origin) return false;
@@ -95,12 +99,27 @@ app
     }),
   )
   .get("/", () => "Hello Elysia")
+  .get("/healthz", () => ({
+    status: "ok",
+    service: "restaurant-api",
+    checkedAt: new Date().toISOString(),
+  }))
+  .get("/readyz", async () => {
+    const db = await import("./lib/connect").then((module) => module.getDB());
+    await db.query("SELECT 1");
+    return {
+      status: "ready",
+      database: "ok",
+      checkedAt: new Date().toISOString(),
+    };
+  })
   .use(profilerouter)
   .use(middlewareadmin)
   .use(Tablerouter)
   .use(Adminrouter)
   .use(Auths)
   .use(RestaurantRouter)
+  .use(SuperAdminRouter)
   .use(menurouter)
   .use(Orderrouter)
   .use(web)

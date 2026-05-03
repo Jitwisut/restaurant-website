@@ -13,11 +13,19 @@ import {
   type SubscriptionStatus,
 } from "../lib/subscription";
 import {
+  createBillingRequest,
+  listRestaurantBillingRequests,
+} from "../lib/billingRequests";
+import {
   getJwtPayload,
   normalizeRestaurantId,
   requireRestaurantScope,
   requireRole,
 } from "../middleware/restaurantScope";
+import {
+  getRestaurantSettings,
+  updateRestaurantSettings,
+} from "../lib/restaurantSettings";
 
 const db = getDB();
 
@@ -28,6 +36,15 @@ function toSlug(value: string) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 100);
+}
+
+async function getUserIdFromPayload(payload: { email?: string } | null | undefined) {
+  if (!payload?.email) return null;
+  const result = await db.query(
+    "SELECT id FROM users WHERE LOWER(email)=LOWER($1) LIMIT 1",
+    [payload.email],
+  );
+  return result.rowCount > 0 ? Number(result.rows[0].id) : null;
 }
 
 export const RestaurantController = {
@@ -327,6 +344,158 @@ export const RestaurantController = {
     return { restaurant: result.rows[0] };
   },
 
+  settings: async (context: Context & { jwt?: any }) => {
+    const { set } = context;
+    const scope = await requireRole(
+      context,
+      ["owner", "admin", "staff", "kitchen", "superadmin"],
+      { skipSubscriptionCheck: true },
+    );
+    if (!scope.ok) return scope.response;
+
+    const payload = await getRestaurantSettings(scope.restaurantId);
+    if (!payload) {
+      set.status = 404;
+      return { message: "Restaurant not found" };
+    }
+
+    const subscriptionPayload = await getRestaurantWithSubscription(
+      scope.restaurantId,
+    );
+
+    return {
+      ...payload,
+      subscription: subscriptionPayload?.subscription || null,
+    };
+  },
+
+  updateSettings: async (
+    context: Context & {
+      body: {
+        profile?: Record<string, any>;
+        business_hours?: Record<string, any>;
+        account_security?: Record<string, any>;
+        team_settings?: Record<string, any>;
+        order_settings?: Record<string, any>;
+        table_qr_settings?: Record<string, any>;
+        menu_settings?: Record<string, any>;
+        notification_settings?: Record<string, any>;
+        danger_zone?: Record<string, any>;
+      };
+      jwt?: any;
+    },
+  ) => {
+    const { body, set } = context;
+    const scope = await requireRole(context, ["owner", "admin", "superadmin"], {
+      skipSubscriptionCheck: true,
+    });
+    if (!scope.ok) return scope.response;
+
+    const profile = body?.profile || {};
+    const name = typeof profile.name === "string" ? profile.name.trim() : "";
+    const slug = typeof profile.slug === "string" ? toSlug(profile.slug) : "";
+
+    if (profile.name !== undefined && !name) {
+      set.status = 400;
+      return { message: "Restaurant name is required" };
+    }
+    if (profile.slug !== undefined && !slug) {
+      set.status = 400;
+      return { message: "Restaurant slug is required" };
+    }
+
+    if (name || slug) {
+      try {
+        await db.query(
+          `UPDATE restaurants
+              SET name = COALESCE($1, name),
+                  slug = COALESCE($2, slug),
+                  updated_at = NOW()
+            WHERE id=$3`,
+          [name || null, slug || null, scope.restaurantId],
+        );
+      } catch (error) {
+        const dbError = error as { code?: string };
+        if (dbError.code === "23505") {
+          set.status = 409;
+          return { message: "Restaurant slug already exists" };
+        }
+        throw error;
+      }
+    }
+
+    const updated = await updateRestaurantSettings(scope.restaurantId, body || {});
+    if (!updated) {
+      set.status = 404;
+      return { message: "Restaurant not found" };
+    }
+
+    const subscriptionPayload = await getRestaurantWithSubscription(
+      scope.restaurantId,
+    );
+
+    return {
+      ...updated,
+      subscription: subscriptionPayload?.subscription || null,
+    };
+  },
+
+  changePassword: async (
+    context: Context & {
+      body: { current_password?: string; new_password?: string };
+      jwt?: any;
+    },
+  ) => {
+    const { body, set } = context;
+    const scope = await requireRole(context, ["owner", "admin", "superadmin"], {
+      skipSubscriptionCheck: true,
+    });
+    if (!scope.ok) return scope.response;
+
+    if (!scope.payload?.email) {
+      set.status = 400;
+      return { message: "Account email is required" };
+    }
+    if (!body?.current_password || !body?.new_password) {
+      set.status = 400;
+      return { message: "Current password and new password are required" };
+    }
+    if (body.new_password.length < 8) {
+      set.status = 400;
+      return { message: "New password must be at least 8 characters" };
+    }
+
+    const userResult = await db.query(
+      `SELECT id, password
+         FROM users
+        WHERE LOWER(email)=LOWER($1)
+          AND (restaurant_id=$2 OR role='superadmin')
+        LIMIT 1`,
+      [scope.payload.email, scope.restaurantId],
+    );
+    if (userResult.rowCount === 0) {
+      set.status = 404;
+      return { message: "User not found" };
+    }
+
+    const valid = await bcryptjs.compare(
+      body.current_password,
+      userResult.rows[0].password,
+    );
+    if (!valid) {
+      set.status = 403;
+      return { message: "Current password is incorrect" };
+    }
+
+    const hash = await bcryptjs.hash(body.new_password, 10);
+    await db.query("UPDATE users SET password=$1 WHERE id=$2", [
+      hash,
+      userResult.rows[0].id,
+    ]);
+
+    return { success: true };
+  },
+
   list: async (context: Context & { jwt?: any }) => {
     const scope = await requireRole(context, ["superadmin"]);
     if (!scope.ok) return scope.response;
@@ -435,6 +604,51 @@ export const RestaurantController = {
     });
 
     return { subscription };
+  },
+
+  billingRequests: async (context: Context & { jwt?: any }) => {
+    const scope = await requireRole(context, ["owner", "admin", "superadmin"], {
+      skipSubscriptionCheck: true,
+    });
+    if (!scope.ok) return scope.response;
+
+    const requests = await listRestaurantBillingRequests(scope.restaurantId);
+    return { requests };
+  },
+
+  createBillingRequest: async (
+    context: Context & {
+      body: {
+        plan_code?: string;
+        months?: number;
+        amount?: number;
+        note?: string;
+        proof_base64?: string;
+        proof_mime?: string;
+        proof_filename?: string;
+      };
+      jwt?: any;
+    },
+  ) => {
+    const scope = await requireRole(context, ["owner", "admin", "superadmin"], {
+      skipSubscriptionCheck: true,
+    });
+    if (!scope.ok) return scope.response;
+
+    const requestedByUserId = await getUserIdFromPayload(scope.payload);
+    const request = await createBillingRequest({
+      restaurantId: scope.restaurantId,
+      requestedByUserId,
+      planCode: context.body?.plan_code || "starter",
+      months: context.body?.months || 1,
+      amount: context.body?.amount || null,
+      note: context.body?.note || null,
+      proofBase64: context.body?.proof_base64 || null,
+      proofMime: context.body?.proof_mime || null,
+      proofFilename: context.body?.proof_filename || null,
+    });
+
+    return { request };
   },
 
   renew: async (

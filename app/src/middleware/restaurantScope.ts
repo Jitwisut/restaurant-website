@@ -4,6 +4,7 @@ import {
   getRestaurantSubscriptionSnapshot,
   isSubscriptionBlocked,
 } from "../lib/subscription";
+import { getRestaurantSettings } from "../lib/restaurantSettings";
 
 export type RestaurantRole = "owner" | "admin" | "staff" | "user" | "kitchen" | "superadmin";
 
@@ -148,7 +149,81 @@ export async function requireRole(
         };
       }
     }
+
+    const permission = await enforceTeamSettings(context, scope);
+    if (!permission.ok) return permission;
   }
 
   return scope;
+}
+
+async function enforceTeamSettings(
+  context: Context & { jwt?: any },
+  scope: { payload: RestaurantJwtPayload; restaurantId: number | null },
+) {
+  const role = scope.payload.role;
+  if (!role || scope.restaurantId === null) {
+    return { ok: true as const };
+  }
+
+  const path = new URL(context.request.url).pathname;
+  const method = context.request.method.toUpperCase();
+  if (
+    path === "/restaurant/settings" ||
+    path === "/restaurant/account/password"
+  ) {
+    return { ok: true as const };
+  }
+
+  const payload = await getRestaurantSettings(scope.restaurantId);
+  const team = payload?.settings?.team_settings || {};
+  const forbidden = (message: string) => {
+    context.set.status = 403;
+    return {
+      ok: false as const,
+      response: { message },
+    };
+  };
+
+  if (role === "staff" && path.startsWith("/tables") && !team.staffCanAccessTables) {
+    return forbidden("Staff is not allowed to access tables");
+  }
+
+  if (
+    role === "admin" &&
+    path.startsWith("/tables") &&
+    method !== "GET" &&
+    !team.adminCanManageTables
+  ) {
+    return forbidden("Admin is not allowed to manage tables");
+  }
+
+  if (
+    role === "admin" &&
+    (path.startsWith("/admin/menu") || path === "/admin/upload-menu") &&
+    method !== "GET" &&
+    !team.adminCanManageMenu
+  ) {
+    return forbidden("Admin is not allowed to manage menu");
+  }
+
+  if (
+    role === "owner" &&
+    path.startsWith("/restaurant/billing") &&
+    !team.ownerCanManageBilling
+  ) {
+    return forbidden("Owner is not allowed to manage billing");
+  }
+
+  if (
+    role === "kitchen" &&
+    team.kitchenCanAccessOrdersOnly &&
+    (path.startsWith("/tables") ||
+      path.startsWith("/admin") ||
+      path.startsWith("/menu"))
+  ) {
+    return forbidden("Kitchen is limited to order operations");
+  }
+
+  return { ok: true as const };
 }

@@ -16,6 +16,10 @@ function formatDate(value) {
   });
 }
 
+function getSubscriptionFromResponse(response) {
+  return response?.data?.subscription || null;
+}
+
 const statusClass = {
   trial: "bg-sky-100 text-sky-700",
   active: "bg-emerald-100 text-emerald-700",
@@ -37,8 +41,8 @@ export default function SuperadminSubscriptionsPage() {
     if (!auth?.token || auth?.role !== "superadmin") return;
     setLoading(true);
     try {
-      const response = await api.get("/restaurant/all");
-      setRestaurants(response.data.restaurants || []);
+      const response = await api.get("/superadmin/restaurants?pageSize=100");
+      setRestaurants(response.data.items || response.data.restaurants || []);
     } catch (error) {
       Swal.fire({
         icon: "error",
@@ -66,11 +70,37 @@ export default function SuperadminSubscriptionsPage() {
   const runAction = async (restaurantId, action, body = {}) => {
     setBusyId(`${action}:${restaurantId}`);
     try {
-      await api.post(`/restaurant/${restaurantId}${action}`, body);
+      const response = await api.post(
+        `/superadmin/restaurants/${restaurantId}${action}`,
+        body,
+      );
+      const subscription = getSubscriptionFromResponse(response);
+      if (subscription) {
+        setRestaurants((current) =>
+          current.map((restaurant) =>
+            Number(restaurant.id) === Number(restaurantId)
+              ? {
+                  ...restaurant,
+                  subscription_status: subscription.status,
+                  subscription_plan_code: subscription.plan_code,
+                  current_period_start: subscription.current_period_start,
+                  current_period_end: subscription.current_period_end,
+                  grace_ends_at: subscription.grace_ends_at,
+                  renewal_requested_at: subscription.renewal_requested_at,
+                  renewal_request_note: subscription.renewal_request_note,
+                  last_payment_at: subscription.last_payment_at,
+                }
+              : restaurant,
+          ),
+        );
+      }
       await load();
       Swal.fire({
         icon: "success",
         title: "Subscription updated",
+        text: subscription?.current_period_end
+          ? `New period end: ${formatDate(subscription.current_period_end)}`
+          : undefined,
         timer: 1000,
         showConfirmButton: false,
       });
@@ -88,7 +118,7 @@ export default function SuperadminSubscriptionsPage() {
   const runCycle = async () => {
     setBusyId("cycle");
     try {
-      await api.post("/restaurant/subscription/run-cycle");
+      await api.post("/superadmin/subscription/run-cycle");
       await load();
     } finally {
       setBusyId(null);
@@ -120,6 +150,13 @@ export default function SuperadminSubscriptionsPage() {
               className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
             >
               Back
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push("/superadmin/billing")}
+              className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+            >
+              Billing requests
             </button>
             <button
               type="button"
@@ -200,7 +237,11 @@ export default function SuperadminSubscriptionsPage() {
                             runAction(
                               restaurant.id,
                               "/subscription/renew",
-                              { months: 1, note: "Manual one-month renewal" },
+                              {
+                                months: 1,
+                                note: "Manual one-month renewal",
+                                reason: "Manual one-month renewal",
+                              },
                             )
                           }
                           className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
@@ -214,7 +255,11 @@ export default function SuperadminSubscriptionsPage() {
                             runAction(
                               restaurant.id,
                               "/subscription/status",
-                              { status: "grace", note: "Moved to grace manually" },
+                              {
+                                status: "grace",
+                                note: "Moved to grace manually",
+                                reason: "Moved to grace manually",
+                              },
                             )
                           }
                           className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-semibold text-orange-700 disabled:opacity-60"
@@ -228,7 +273,11 @@ export default function SuperadminSubscriptionsPage() {
                             runAction(
                               restaurant.id,
                               "/subscription/status",
-                              { status: "suspended", note: "Suspended manually" },
+                              {
+                                status: "suspended",
+                                note: "Suspended manually",
+                                reason: "Suspended manually",
+                              },
                             )
                           }
                           className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 disabled:opacity-60"
@@ -242,7 +291,11 @@ export default function SuperadminSubscriptionsPage() {
                             runAction(
                               restaurant.id,
                               "/subscription/status",
-                              { status: "active", note: "Reactivated manually" },
+                              {
+                                status: "active",
+                                note: "Reactivated manually",
+                                reason: "Reactivated manually",
+                              },
                             )
                           }
                           className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 disabled:opacity-60"

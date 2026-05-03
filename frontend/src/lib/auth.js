@@ -83,6 +83,9 @@ export function normalizeAuthSession(raw) {
       raw.renewal_requested_at ??
       raw.subscription?.renewal_requested_at ??
       null,
+    impersonating: Boolean(raw.impersonating),
+    impersonationReason:
+      raw.impersonationReason ?? raw.impersonation_reason ?? null,
     redirectPath: raw.redirectPath ?? raw.redirectpath ?? null,
   };
 }

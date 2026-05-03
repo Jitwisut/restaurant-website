@@ -99,11 +99,22 @@ export async function setupTestDB() {
       price DECIMAL(10, 2) NOT NULL,
       category VARCHAR(100),
       description TEXT,
+      ingredients TEXT,
+      is_available BOOLEAN NOT NULL DEFAULT true,
       image_blob BYTEA,
       image_mime VARCHAR(50),
       restaurant_id INTEGER NOT NULL REFERENCES restaurants(id),
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
+  `);
+  await db.query(`
+    ALTER TABLE menu_new
+      ADD COLUMN IF NOT EXISTS ingredients TEXT,
+      ADD COLUMN IF NOT EXISTS is_available BOOLEAN NOT NULL DEFAULT true
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS idx_menu_restaurant_category_available
+      ON menu_new(restaurant_id, category, is_available)
   `);
 
   await db.query(`
@@ -139,8 +150,32 @@ export async function setupTestDB() {
       customer_session VARCHAR(255),
       status VARCHAR(50) DEFAULT 'pending',
       restaurant_id INTEGER NOT NULL REFERENCES restaurants(id),
+      subtotal NUMERIC(12, 2) NOT NULL DEFAULT 0,
+      discount_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
+      service_charge_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
+      tax_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
+      grand_total NUMERIC(12, 2) NOT NULL DEFAULT 0,
+      payment_status VARCHAR(30) NOT NULL DEFAULT 'unpaid',
+      paid_at TIMESTAMP,
+      completed_at TIMESTAMP,
+      refunded_at TIMESTAMP,
+      voided_at TIMESTAMP,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
+  `);
+
+  await db.query(`
+    ALTER TABLE orders
+      ADD COLUMN IF NOT EXISTS subtotal NUMERIC(12, 2) NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS service_charge_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS tax_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS grand_total NUMERIC(12, 2) NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS payment_status VARCHAR(30) NOT NULL DEFAULT 'unpaid',
+      ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS voided_at TIMESTAMP
   `);
 
   await db.query(`
@@ -154,6 +189,23 @@ export async function setupTestDB() {
       restaurant_id INTEGER NOT NULL REFERENCES restaurants(id),
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
+  `);
+
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS idx_orders_sales_paid
+      ON orders(restaurant_id, payment_status, paid_at)
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS idx_orders_sales_status_created
+      ON orders(restaurant_id, status, created_at)
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS idx_order_items_order_restaurant
+      ON order_items(order_id, restaurant_id)
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS idx_tables_restaurant_status
+      ON tables(restaurant_id, status)
   `);
 
   await db.query(`
@@ -175,6 +227,60 @@ export async function setupTestDB() {
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS superadmin_audit_logs (
+      id SERIAL PRIMARY KEY,
+      actor_user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+      actor_email VARCHAR(255) NULL,
+      restaurant_id INTEGER NULL REFERENCES restaurants(id) ON DELETE SET NULL,
+      target_user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+      action VARCHAR(100) NOT NULL,
+      reason TEXT NULL,
+      old_value_json JSONB NULL,
+      new_value_json JSONB NULL,
+      ip_address VARCHAR(100) NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS billing_requests (
+      id SERIAL PRIMARY KEY,
+      restaurant_id INTEGER NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+      requested_by_user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+      status VARCHAR(30) NOT NULL DEFAULT 'pending_review',
+      plan_code VARCHAR(50) NOT NULL DEFAULT 'starter',
+      months INTEGER NOT NULL DEFAULT 1,
+      amount NUMERIC(12, 2),
+      note TEXT,
+      proof_blob BYTEA,
+      proof_mime VARCHAR(100),
+      proof_filename VARCHAR(255),
+      reviewed_by_user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+      review_note TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      reviewed_at TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS restaurant_settings (
+      restaurant_id INTEGER PRIMARY KEY REFERENCES restaurants(id) ON DELETE CASCADE,
+      profile JSONB NOT NULL DEFAULT '{}'::jsonb,
+      business_hours JSONB NOT NULL DEFAULT '{}'::jsonb,
+      account_security JSONB NOT NULL DEFAULT '{}'::jsonb,
+      team_settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+      order_settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+      table_qr_settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+      menu_settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+      notification_settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+      danger_zone JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
 }
 
 /**
@@ -189,6 +295,9 @@ export async function cleanTestDB() {
   await db.query("DELETE FROM sessions");
   await db.query("DELETE FROM tables");
   await db.query("DELETE FROM menu_new");
+  await db.query("DELETE FROM superadmin_audit_logs");
+  await db.query("DELETE FROM billing_requests");
+  await db.query("DELETE FROM restaurant_settings");
   await db.query("DELETE FROM subscriptions");
   await db.query("DELETE FROM users");
   await db.query("DELETE FROM restaurants");
@@ -205,6 +314,9 @@ export async function teardownTestDB() {
   await db.query("DROP TABLE IF EXISTS sessions CASCADE");
   await db.query("DROP TABLE IF EXISTS tables CASCADE");
   await db.query("DROP TABLE IF EXISTS menu_new CASCADE");
+  await db.query("DROP TABLE IF EXISTS superadmin_audit_logs CASCADE");
+  await db.query("DROP TABLE IF EXISTS billing_requests CASCADE");
+  await db.query("DROP TABLE IF EXISTS restaurant_settings CASCADE");
   await db.query("DROP TABLE IF EXISTS subscriptions CASCADE");
   await db.query("DROP TABLE IF EXISTS users CASCADE");
   await db.query("DROP TABLE IF EXISTS restaurants CASCADE");

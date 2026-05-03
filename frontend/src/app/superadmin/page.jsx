@@ -12,12 +12,9 @@ const statusStyles = {
   active: "bg-emerald-100 text-emerald-700",
   suspended: "bg-rose-100 text-rose-700",
   inactive: "bg-slate-200 text-slate-700",
+  archived: "bg-indigo-100 text-indigo-700",
   deleted: "bg-zinc-200 text-zinc-700",
 };
-
-function formatStatus(status) {
-  return String(status || "inactive").toUpperCase();
-}
 
 function formatDate(value) {
   if (!value) return "No date";
@@ -42,17 +39,39 @@ export default function SuperAdminPage() {
   const { auth, ready, signOut, saveAuth } = useAuth();
   const api = useMemo(() => createApiClient(auth?.token), [auth?.token]);
   const [restaurants, setRestaurants] = useState([]);
+  const [counts, setCounts] = useState({
+    total: 0,
+    pending: 0,
+    active: 0,
+    suspended: 0,
+  });
+  const [pagination, setPagination] = useState({
+    page: 1,
+    pageSize: 20,
+    total: 0,
+    totalPages: 1,
+  });
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
   const [actionId, setActionId] = useState(null);
 
-  const loadRestaurants = async () => {
+  const loadRestaurants = async (page = pagination.page) => {
     if (!auth?.token || auth?.role !== "superadmin") return;
 
     setLoading(true);
     try {
-      const response = await api.get("/restaurant/all");
-      setRestaurants(response.data.restaurants || []);
+      const params = new URLSearchParams({
+        page: String(page),
+        pageSize: String(pagination.pageSize),
+      });
+      if (query.trim()) params.set("q", query.trim());
+      if (statusFilter !== "all") params.set("status", statusFilter);
+
+      const response = await api.get(`/superadmin/restaurants?${params.toString()}`);
+      setRestaurants(response.data.items || []);
+      setCounts((current) => ({ ...current, ...(response.data.counts || {}) }));
+      setPagination(response.data.pagination || pagination);
     } catch (error) {
       Swal.fire({
         icon: "error",
@@ -77,62 +96,51 @@ export default function SuperAdminPage() {
       return;
     }
 
-    loadRestaurants();
+    loadRestaurants(1);
   }, [auth, ready, router]);
 
-  const counts = useMemo(
+  const pendingRestaurants = useMemo(
     () =>
-      restaurants.reduce(
-        (accumulator, restaurant) => {
-          const status = String(restaurant.status || "inactive");
-          accumulator.total += 1;
-          accumulator.pending += status === "pending" ? 1 : 0;
-          accumulator.active += status === "active" ? 1 : 0;
-          accumulator.suspended += status === "suspended" ? 1 : 0;
-          return accumulator;
-        },
-        { total: 0, pending: 0, active: 0, suspended: 0 },
+      restaurants.filter(
+        (restaurant) => String(restaurant.status || "") === "pending",
       ),
     [restaurants],
   );
 
-  const filteredRestaurants = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) return restaurants;
-
-    return restaurants.filter((restaurant) =>
-      [restaurant.name, restaurant.slug, restaurant.id, restaurant.status]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(normalized)),
-    );
-  }, [query, restaurants]);
-
-  const pendingRestaurants = useMemo(
-    () =>
-      filteredRestaurants.filter(
-        (restaurant) => String(restaurant.status || "") === "pending",
-      ),
-    [filteredRestaurants],
-  );
-
   const updateRestaurantStatus = async (restaurant, action) => {
+    const needsReason = ["reject", "suspend", "archive", "delete"].includes(action);
+    let reason = null;
+
+    if (needsReason) {
+      const reasonResult = await Swal.fire({
+        icon: "question",
+        title: `${action[0].toUpperCase()}${action.slice(1)} reason`,
+        input: "textarea",
+        inputPlaceholder: "Add the internal reason for this action",
+        showCancelButton: true,
+        confirmButtonText: "Continue",
+        inputValidator: (value) => {
+          if (!value || !value.trim()) return "Reason is required";
+          return null;
+        },
+      });
+      if (!reasonResult.isConfirmed) return;
+      reason = reasonResult.value.trim();
+    }
+
     setActionId(`${action}:${restaurant.id}`);
     try {
-      await api.post(`/restaurant/${restaurant.id}/${action}`);
-      const successTitle =
-        action === "approve"
-          ? "Restaurant approved"
-          : action === "suspend"
-            ? "Restaurant suspended"
-            : "Restaurant rejected";
+      await api.post(`/superadmin/restaurants/${restaurant.id}/${action}`, {
+        reason,
+      });
 
       Swal.fire({
         icon: "success",
-        title: successTitle,
-        timer: 1200,
+        title: "Restaurant updated",
+        timer: 1100,
         showConfirmButton: false,
       });
-      await loadRestaurants();
+      await loadRestaurants(pagination.page);
     } catch (error) {
       Swal.fire({
         icon: "error",
@@ -145,15 +153,35 @@ export default function SuperAdminPage() {
   };
 
   const openRestaurantDashboard = async (restaurant) => {
+    const reasonResult = await Swal.fire({
+      icon: "question",
+      title: "Open restaurant dashboard",
+      input: "textarea",
+      inputPlaceholder: "Example: investigating owner support ticket",
+      showCancelButton: true,
+      confirmButtonText: "Open dashboard",
+      inputValidator: (value) => {
+        if (!value || !value.trim()) return "Reason is required";
+        return null;
+      },
+    });
+
+    if (!reasonResult.isConfirmed) return;
+
     setActionId(`open:${restaurant.id}`);
     try {
-      const response = await api.post(`/restaurant/${restaurant.id}/impersonate`);
+      const response = await api.post(
+        `/superadmin/restaurants/${restaurant.id}/impersonate`,
+        { reason: reasonResult.value.trim() },
+      );
       const session = await saveAuth(
         {
           ...auth,
           token: response.data.token,
           refreshToken: response.data.refreshToken,
           role: response.data.role || "superadmin",
+          impersonating: true,
+          impersonationReason: reasonResult.value.trim(),
           restaurant: response.data.restaurant,
           restaurantId: response.data.restaurant?.id,
           restaurantSlug: response.data.restaurant?.slug,
@@ -187,16 +215,14 @@ export default function SuperAdminPage() {
   if (!ready || loading) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-background text-on-surface">
-        <div className="rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
+        <div className="rounded-lg border border-slate-200 bg-white px-5 py-4 shadow-sm">
           Loading superadmin dashboard...
         </div>
       </main>
     );
   }
 
-  if (auth?.role !== "superadmin") {
-    return null;
-  }
+  if (auth?.role !== "superadmin") return null;
 
   return (
     <div className="min-h-screen bg-background text-on-background">
@@ -213,338 +239,189 @@ export default function SuperAdminPage() {
         <nav className="flex flex-1 flex-col gap-1">
           <button
             type="button"
-            className="flex items-center gap-3 rounded-lg bg-slate-100 px-4 py-3 font-semibold text-[#2D3E61] transition-all duration-150"
+            className="flex items-center gap-3 rounded-lg bg-slate-100 px-4 py-3 font-semibold text-[#2D3E61]"
           >
             <span className="material-symbols-outlined">verified</span>
-            <span className="text-sm antialiased">Restaurant Approvals</span>
+            <span className="text-sm">Restaurants</span>
           </button>
           <button
             type="button"
             onClick={() => router.push("/superadmin/new")}
-            className="flex items-center gap-3 px-4 py-3 text-slate-500 transition-all duration-150 hover:bg-slate-50 hover:text-[#2D3E61]"
+            className="flex items-center gap-3 px-4 py-3 text-slate-500 hover:bg-slate-50 hover:text-[#2D3E61]"
           >
             <span className="material-symbols-outlined">add_business</span>
-            <span className="text-sm antialiased">Add Restaurant</span>
+            <span className="text-sm">Add Restaurant</span>
           </button>
           <button
             type="button"
             onClick={() => router.push("/superadmin/subscriptions")}
-            className="flex items-center gap-3 px-4 py-3 text-slate-500 transition-all duration-150 hover:bg-slate-50 hover:text-[#2D3E61]"
+            className="flex items-center gap-3 px-4 py-3 text-slate-500 hover:bg-slate-50 hover:text-[#2D3E61]"
           >
             <span className="material-symbols-outlined">credit_card</span>
-            <span className="text-sm antialiased">Subscriptions</span>
+            <span className="text-sm">Subscriptions</span>
           </button>
           <button
             type="button"
-            className="flex items-center gap-3 px-4 py-3 text-slate-500 transition-all duration-150 hover:bg-slate-50 hover:text-[#2D3E61]"
+            onClick={() => router.push("/superadmin/audit")}
+            className="flex items-center gap-3 px-4 py-3 text-slate-500 hover:bg-slate-50 hover:text-[#2D3E61]"
+          >
+            <span className="material-symbols-outlined">fact_check</span>
+            <span className="text-sm">Audit Log</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => router.push("/superadmin/health")}
+            className="flex items-center gap-3 px-4 py-3 text-slate-500 hover:bg-slate-50 hover:text-[#2D3E61]"
           >
             <span className="material-symbols-outlined">monitor_heart</span>
-            <span className="text-sm antialiased">System Health</span>
-          </button>
-          <button
-            type="button"
-            className="flex items-center gap-3 px-4 py-3 text-slate-500 transition-all duration-150 hover:bg-slate-50 hover:text-[#2D3E61]"
-          >
-            <span className="material-symbols-outlined">settings</span>
-            <span className="text-sm antialiased">Settings</span>
+            <span className="text-sm">System Health</span>
           </button>
         </nav>
 
         <div className="mt-auto flex items-center gap-3 border-t border-slate-100 px-2 pt-4">
-          <div className="flex h-10 w-10 items-center justify-center rounded-full border-2 border-white bg-slate-200 text-xs font-bold text-slate-700 shadow-sm">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-200 text-xs font-bold text-slate-700">
             {String(auth?.username || "SA").slice(0, 2).toUpperCase()}
           </div>
           <div className="min-w-0 overflow-hidden">
             <p className="truncate text-sm font-bold text-primary">
               {auth?.username || "Admin User"}
             </p>
-            <p className="truncate text-xs text-slate-400">
-              {auth?.email || "superadmin@system.com"}
-            </p>
+            <button
+              type="button"
+              onClick={handleSignOut}
+              className="text-xs font-semibold text-slate-400 hover:text-primary"
+            >
+              Sign out
+            </button>
           </div>
         </div>
       </aside>
 
       <main className="ml-64 flex min-h-screen flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex h-16 w-full items-center justify-between border-b border-slate-100 bg-white/80 px-8 backdrop-blur-md">
-          <div className="flex flex-1 items-center gap-4">
+        <header className="sticky top-0 z-30 flex min-h-16 w-full items-center justify-between gap-4 border-b border-slate-100 bg-white/85 px-8 py-3 backdrop-blur-md">
+          <div className="flex flex-1 items-center gap-3">
             <div className="relative w-full max-w-md">
               <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-lg text-slate-400">
                 search
               </span>
               <input
-                className="w-full rounded-lg border-none bg-surface-container-low py-2 pl-10 pr-4 text-sm focus:ring-2 focus:ring-primary-container"
-                placeholder="Search tenants or requests..."
+                className="w-full rounded-lg border border-transparent bg-surface-container-low py-2 pl-10 pr-4 text-sm focus:border-primary focus:outline-none"
+                placeholder="Search name, slug, or owner email"
                 type="text"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") loadRestaurants(1);
+                }}
               />
             </div>
+            <select
+              value={statusFilter}
+              onChange={(event) => setStatusFilter(event.target.value)}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600"
+            >
+              <option value="all">All statuses</option>
+              <option value="pending">Pending</option>
+              <option value="active">Active</option>
+              <option value="suspended">Suspended</option>
+              <option value="archived">Archived</option>
+              <option value="deleted">Deleted</option>
+            </select>
+            <button
+              type="button"
+              onClick={() => loadRestaurants(1)}
+              className="rounded-lg bg-primary px-4 py-2 text-sm font-bold text-white hover:bg-primary-container"
+            >
+              Apply
+            </button>
           </div>
-
-          <div className="flex items-center gap-6">
-            <div className="flex items-center gap-4">
-              <button
-                type="button"
-                onClick={loadRestaurants}
-                className="text-slate-500 transition-colors hover:text-primary"
-                title="Refresh"
-              >
-                <span className="material-symbols-outlined">refresh</span>
-              </button>
-              <button
-                type="button"
-                onClick={handleSignOut}
-                className="text-slate-500 transition-colors hover:text-primary"
-                title="Sign out"
-              >
-                <span className="material-symbols-outlined">logout</span>
-              </button>
-            </div>
-            <div className="h-8 w-px bg-slate-200" />
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-bold text-primary">
-                Superadmin Dashboard
-              </span>
-            </div>
-          </div>
+          <button
+            type="button"
+            onClick={() => loadRestaurants(pagination.page)}
+            className="text-slate-500 hover:text-primary"
+            title="Refresh"
+          >
+            <span className="material-symbols-outlined">refresh</span>
+          </button>
         </header>
 
         <section className="mx-auto flex w-full max-w-7xl flex-col gap-8 p-8">
-          <div className="flex flex-col gap-1">
-            <h2 className="font-h1 text-h1 text-primary">
-              Restaurant Approvals
-            </h2>
-            <p className="font-body-md text-slate-500">
-              Manage and verify new tenant registration requests.
-            </p>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="font-h1 text-h1 text-primary">Restaurants</h2>
+              <p className="font-body-md text-slate-500">
+                Manage tenant approvals, lifecycle, subscriptions, and support access.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => router.push("/superadmin/new")}
+              className="rounded-lg bg-primary px-4 py-2 text-sm font-bold text-white hover:bg-primary-container"
+            >
+              Add Restaurant
+            </button>
           </div>
 
-          <div className="grid grid-cols-1 gap-gutter md:grid-cols-3">
-            <div className="flex items-start justify-between rounded-xl border border-slate-200 bg-white p-6 shadow-[0_12px_24px_-10px_rgba(22,40,74,0.04)]">
-              <div>
-                <p className="mb-1 font-label-md text-slate-500">
-                  Pending Approvals
-                </p>
-                <h3 className="text-3xl font-black text-primary">
-                  {counts.pending}
-                </h3>
-                <div className="mt-4 flex w-fit items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-xs font-medium text-amber-600">
-                  <span className="material-symbols-outlined text-sm">
-                    priority_high
-                  </span>
-                  Requires Action
+          <div className="grid grid-cols-1 gap-gutter md:grid-cols-4">
+            {[
+              ["Pending", counts.pending, "priority_high", "bg-amber-50 text-amber-700"],
+              ["Active", counts.active, "storefront", "bg-emerald-50 text-emerald-700"],
+              ["Suspended", counts.suspended, "gpp_bad", "bg-rose-50 text-rose-700"],
+              ["Total", counts.total, "database", "bg-slate-50 text-slate-700"],
+            ].map(([label, value, icon, tone]) => (
+              <div
+                key={label}
+                className="flex items-start justify-between rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
+              >
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                    {label}
+                  </p>
+                  <h3 className="mt-2 text-3xl font-black text-primary">
+                    {value}
+                  </h3>
+                </div>
+                <div className={`rounded-lg p-2 ${tone}`}>
+                  <span className="material-symbols-outlined">{icon}</span>
                 </div>
               </div>
-              <div className="rounded-lg bg-primary-container/10 p-3">
-                <span className="material-symbols-outlined text-primary-container">
-                  verified
-                </span>
-              </div>
-            </div>
-
-            <div className="flex items-start justify-between rounded-xl border border-slate-200 bg-white p-6 shadow-[0_12px_24px_-10px_rgba(22,40,74,0.04)]">
-              <div>
-                <p className="mb-1 font-label-md text-slate-500">
-                  Total Tenants
-                </p>
-                <h3 className="text-3xl font-black text-primary">
-                  {counts.total}
-                </h3>
-                <div className="mt-4 flex w-fit items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-600">
-                  <span className="material-symbols-outlined text-sm">
-                    storefront
-                  </span>
-                  Platform-wide
-                </div>
-              </div>
-              <div className="rounded-lg bg-secondary-container/20 p-3">
-                <span className="material-symbols-outlined text-secondary">
-                  storefront
-                </span>
-              </div>
-            </div>
-
-            <div className="flex items-start justify-between rounded-xl border border-slate-200 bg-white p-6 shadow-[0_12px_24px_-10px_rgba(22,40,74,0.04)]">
-              <div>
-                <p className="mb-1 font-label-md text-slate-500">
-                  Suspended Tenants
-                </p>
-                <h3 className="text-3xl font-black text-primary">
-                  {counts.suspended}
-                </h3>
-                <div className="mt-4 flex w-fit items-center gap-1 rounded-full bg-slate-50 px-2 py-1 text-xs font-medium text-slate-500">
-                  <span className="material-symbols-outlined text-sm">
-                    gpp_bad
-                  </span>
-                  Needs review
-                </div>
-              </div>
-              <div className="rounded-lg bg-tertiary-fixed/20 p-3">
-                <span className="material-symbols-outlined text-tertiary">
-                  policy_alert
-                </span>
-              </div>
-            </div>
+            ))}
           </div>
 
-          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_12px_24px_-10px_rgba(22,40,74,0.04)]">
+          <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
             <div className="flex items-center justify-between border-b border-slate-100 px-6 py-5">
               <div>
                 <h3 className="font-h3 text-primary">Pending Requests</h3>
                 <p className="mt-1 text-sm text-slate-500">
-                  Showing {pendingRestaurants.length} of {counts.pending} pending
-                  requests
+                  {pendingRestaurants.length} visible pending requests
                 </p>
               </div>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => router.push("/superadmin/new")}
-                  className="flex items-center gap-2 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white transition-all hover:bg-primary-container"
-                >
-                  <span className="material-symbols-outlined text-sm">
-                    add
-                  </span>
-                  Add Restaurant
-                </button>
-                <button
-                  type="button"
-                  className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold transition-all hover:bg-slate-50"
-                >
-                  <span className="material-symbols-outlined text-sm">
-                    filter_list
-                  </span>
-                  Filter
-                </button>
-                <button
-                  type="button"
-                  onClick={loadRestaurants}
-                  className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold transition-all hover:bg-slate-50"
-                >
-                  <span className="material-symbols-outlined text-sm">
-                    refresh
-                  </span>
-                  Refresh
-                </button>
+            </div>
+            <RestaurantTable
+              restaurants={pendingRestaurants}
+              actionId={actionId}
+              onDetails={(restaurant) =>
+                router.push(`/superadmin/restaurants/${restaurant.id}`)
+              }
+              onOpen={openRestaurantDashboard}
+              onStatus={updateRestaurantStatus}
+            />
+          </div>
+
+          <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+            <div className="flex items-center justify-between border-b border-slate-100 px-6 py-5">
+              <div>
+                <h3 className="font-h3 text-primary">All Restaurants</h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Page {pagination.page} of {pagination.totalPages}, {pagination.total} total
+                </p>
               </div>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full border-collapse text-left">
-                <thead>
-                  <tr className="bg-slate-50/50">
-                    <th className="border-b border-slate-100 px-6 py-4 font-label-md text-slate-500">
-                      Restaurant Name
-                    </th>
-                    <th className="border-b border-slate-100 px-6 py-4 font-label-md text-slate-500">
-                      Slug
-                    </th>
-                    <th className="border-b border-slate-100 px-6 py-4 font-label-md text-slate-500">
-                      Registered Date
-                    </th>
-                    <th className="border-b border-slate-100 px-6 py-4 font-label-md text-slate-500">
-                      Status
-                    </th>
-                    <th className="border-b border-slate-100 px-6 py-4 text-right font-label-md text-slate-500">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {pendingRestaurants.length > 0 ? (
-                    pendingRestaurants.map((restaurant) => {
-                      const approveId = `approve:${restaurant.id}`;
-                      const rejectId = `reject:${restaurant.id}`;
-                      const busy = !!actionId;
-
-                      return (
-                        <tr
-                          key={restaurant.id}
-                          className="transition-colors hover:bg-slate-50/50"
-                        >
-                          <td className="px-6 py-4">
-                            <div className="flex items-center gap-3">
-                              <div className="flex h-8 w-8 items-center justify-center rounded bg-primary-container text-xs font-bold text-white">
-                                {getInitials(restaurant.name, restaurant.slug)}
-                              </div>
-                              <span className="font-semibold text-primary">
-                                {restaurant.name}
-                              </span>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 text-sm text-slate-600">
-                            /{restaurant.slug}
-                          </td>
-                          <td className="px-6 py-4 text-sm text-slate-600">
-                            {formatDate(restaurant.created_at)}
-                          </td>
-                          <td className="px-6 py-4">
-                            <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-bold text-amber-700">
-                              {formatStatus(restaurant.status)}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 text-right">
-                            <div className="flex items-center justify-end gap-2">
-                              <button
-                                type="button"
-                                disabled={busy}
-                                onClick={() =>
-                                  updateRestaurantStatus(restaurant, "approve")
-                                }
-                                className="rounded-lg bg-primary px-3 py-1.5 text-xs font-bold text-white transition-all hover:bg-primary/90 disabled:opacity-60"
-                              >
-                                {actionId === approveId ? "Approving..." : "Approve"}
-                              </button>
-                              <button
-                                type="button"
-                                disabled={busy}
-                                onClick={() =>
-                                  updateRestaurantStatus(restaurant, "reject")
-                                }
-                                className="rounded-lg border border-error/20 px-3 py-1.5 text-xs font-bold text-error transition-all hover:bg-error/5 disabled:opacity-60"
-                              >
-                                {actionId === rejectId ? "Rejecting..." : "Reject"}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => openRestaurantDashboard(restaurant)}
-                                disabled={busy}
-                                className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-700 transition-all hover:bg-slate-50 disabled:opacity-60"
-                              >
-                                {actionId === `open:${restaurant.id}`
-                                  ? "Opening..."
-                                  : "Open Dashboard"}
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  ) : (
-                    <tr>
-                      <td
-                        colSpan="5"
-                        className="px-6 py-10 text-center text-sm text-slate-500"
-                      >
-                        No pending restaurant requests found.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="flex items-center justify-between border-t border-slate-100 px-6 py-4 text-sm text-slate-500">
-              <span>
-                Showing {pendingRestaurants.length} of {counts.pending} pending
-                requests
-              </span>
               <div className="flex gap-1">
                 <button
                   type="button"
-                  disabled
-                  className="rounded-lg border border-slate-200 p-2 opacity-50"
+                  disabled={pagination.page <= 1}
+                  onClick={() => loadRestaurants(pagination.page - 1)}
+                  className="rounded-lg border border-slate-200 p-2 disabled:opacity-50"
                 >
                   <span className="material-symbols-outlined text-base">
                     chevron_left
@@ -552,8 +429,9 @@ export default function SuperAdminPage() {
                 </button>
                 <button
                   type="button"
-                  disabled
-                  className="rounded-lg border border-slate-200 p-2 opacity-50"
+                  disabled={pagination.page >= pagination.totalPages}
+                  onClick={() => loadRestaurants(pagination.page + 1)}
+                  className="rounded-lg border border-slate-200 p-2 disabled:opacity-50"
                 >
                   <span className="material-symbols-outlined text-base">
                     chevron_right
@@ -561,165 +439,144 @@ export default function SuperAdminPage() {
                 </button>
               </div>
             </div>
-          </div>
-
-          <div className="grid grid-cols-1 gap-gutter md:grid-cols-2">
-            <div className="group relative overflow-hidden rounded-xl bg-slate-900 p-8">
-              <div className="relative z-10 flex h-full flex-col">
-                <h4 className="mb-4 font-h2 text-white">
-                  System Growth Analytics
-                </h4>
-                <p className="mb-6 max-w-sm text-sm text-slate-400">
-                  Tenant growth is steady and approval load is concentrated in
-                  new restaurant onboarding. Use this view to keep the platform
-                  healthy without mixing in user-level administration.
-                </p>
-                <button
-                  type="button"
-                  className="w-fit rounded-lg bg-white px-4 py-2 text-sm font-bold text-slate-900 transition-all hover:bg-slate-100"
-                >
-                  View Platform Summary
-                </button>
-              </div>
-              <div className="absolute -bottom-10 -right-10 opacity-20 transition-transform duration-500 group-hover:scale-110">
-                <span className="material-symbols-outlined text-[200px] text-white">
-                  analytics
-                </span>
-              </div>
-            </div>
-
-            <div className="relative flex flex-col gap-4 overflow-hidden rounded-xl border border-slate-200 bg-white p-8">
-              <div className="flex items-center gap-3">
-                <span className="material-symbols-outlined text-emerald-500">
-                  verified_user
-                </span>
-                <h4 className="font-h3 text-primary">Approval Snapshot</h4>
-              </div>
-              <p className="text-sm text-slate-500">
-                {counts.pending > 0
-                  ? `${counts.pending} restaurants are waiting for manual approval right now.`
-                  : "There are no restaurants waiting for manual approval right now."}
-              </p>
-              <div className="mt-auto flex -space-x-2">
-                {restaurants.slice(0, 4).map((restaurant) => (
-                  <div
-                    key={restaurant.id}
-                    className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-white bg-slate-300 text-[10px] font-bold"
-                    title={restaurant.name}
-                  >
-                    {getInitials(restaurant.name, restaurant.slug)}
-                  </div>
-                ))}
-                {restaurants.length > 4 ? (
-                  <div className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-white bg-primary text-[10px] font-bold text-white">
-                    +{restaurants.length - 4}
-                  </div>
-                ) : null}
-              </div>
-            </div>
-          </div>
-
-          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_12px_24px_-10px_rgba(22,40,74,0.04)]">
-            <div className="border-b border-slate-100 px-6 py-5">
-              <h3 className="font-h3 text-primary">All Restaurants</h3>
-              <p className="mt-1 text-sm text-slate-500">
-                Full tenant list after search filtering.
-              </p>
-            </div>
-            <div className="divide-y divide-slate-100">
-              {filteredRestaurants.length > 0 ? (
-                filteredRestaurants.map((restaurant) => {
-                  const status = String(restaurant.status || "inactive");
-                  const badgeClass =
-                    statusStyles[status] || statusStyles.inactive;
-
-                  return (
-                    <article
-                      key={`directory-${restaurant.id}`}
-                      className="grid gap-4 px-6 py-5 lg:grid-cols-[1.2fr_0.8fr_auto]"
-                    >
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-3">
-                          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-sm font-bold text-primary">
-                            {getInitials(restaurant.name, restaurant.slug)}
-                          </div>
-                          <div className="min-w-0">
-                            <p className="truncate font-semibold text-primary">
-                              {restaurant.name}
-                            </p>
-                            <p className="truncate text-sm text-slate-500">
-                              /{restaurant.slug}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="grid gap-2 text-sm text-slate-600 sm:grid-cols-2">
-                        <div>
-                          <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                            Status
-                          </p>
-                          <span
-                            className={`mt-1 inline-flex rounded-full px-2.5 py-1 text-xs font-bold ${badgeClass}`}
-                          >
-                            {formatStatus(status)}
-                          </span>
-                        </div>
-                        <div>
-                          <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                            Registered
-                          </p>
-                          <p className="mt-1">{formatDate(restaurant.created_at)}</p>
-                        </div>
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-                        {status !== "active" ? (
-                          <button
-                            type="button"
-                            disabled={!!actionId}
-                            onClick={() =>
-                              updateRestaurantStatus(restaurant, "approve")
-                            }
-                            className="rounded-lg bg-primary px-3 py-2 text-xs font-bold text-white transition hover:bg-primary/90 disabled:opacity-60"
-                          >
-                            Activate
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            disabled={!!actionId}
-                            onClick={() =>
-                              updateRestaurantStatus(restaurant, "suspend")
-                            }
-                            className="rounded-lg bg-error px-3 py-2 text-xs font-bold text-white transition hover:bg-error/90 disabled:opacity-60"
-                          >
-                            Suspend
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          disabled={!!actionId}
-                          onClick={() => openRestaurantDashboard(restaurant)}
-                          className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
-                        >
-                          {actionId === `open:${restaurant.id}`
-                            ? "Opening..."
-                            : "Open Dashboard"}
-                        </button>
-                      </div>
-                    </article>
-                  );
-                })
-              ) : (
-                <div className="px-6 py-10 text-center text-sm text-slate-500">
-                  No restaurants matched your search.
-                </div>
-              )}
-            </div>
+            <RestaurantTable
+              restaurants={restaurants}
+              actionId={actionId}
+              onDetails={(restaurant) =>
+                router.push(`/superadmin/restaurants/${restaurant.id}`)
+              }
+              onOpen={openRestaurantDashboard}
+              onStatus={updateRestaurantStatus}
+            />
           </div>
         </section>
       </main>
+    </div>
+  );
+}
+
+function RestaurantTable({ restaurants, actionId, onDetails, onOpen, onStatus }) {
+  if (!restaurants.length) {
+    return (
+      <div className="px-6 py-10 text-center text-sm text-slate-500">
+        No restaurants found.
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full border-collapse text-left">
+        <thead>
+          <tr className="bg-slate-50/80">
+            <th className="border-b border-slate-100 px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-500">
+              Restaurant
+            </th>
+            <th className="border-b border-slate-100 px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-500">
+              Owner
+            </th>
+            <th className="border-b border-slate-100 px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-500">
+              Subscription
+            </th>
+            <th className="border-b border-slate-100 px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-500">
+              Registered
+            </th>
+            <th className="border-b border-slate-100 px-6 py-4 text-right text-xs font-bold uppercase tracking-wider text-slate-500">
+              Actions
+            </th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {restaurants.map((restaurant) => {
+            const status = String(restaurant.status || "inactive");
+            const badgeClass = statusStyles[status] || statusStyles.inactive;
+            const busy = !!actionId;
+
+            return (
+              <tr key={restaurant.id} className="hover:bg-slate-50/60">
+                <td className="px-6 py-4">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-xs font-bold text-primary">
+                      {getInitials(restaurant.name, restaurant.slug)}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="truncate font-semibold text-primary">
+                        {restaurant.name}
+                      </p>
+                      <div className="mt-1 flex flex-wrap items-center gap-2">
+                        <span className="truncate text-xs text-slate-500">
+                          /{restaurant.slug}
+                        </span>
+                        <span
+                          className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-bold uppercase ${badgeClass}`}
+                        >
+                          {status}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </td>
+                <td className="px-6 py-4 text-sm text-slate-600">
+                  <p>{restaurant.owner_username || "-"}</p>
+                  <p className="text-xs text-slate-400">
+                    {restaurant.owner_email || "No owner email"}
+                  </p>
+                </td>
+                <td className="px-6 py-4 text-sm text-slate-600">
+                  <p className="font-semibold">
+                    {restaurant.subscription_plan_code || "starter"}
+                  </p>
+                  <p className="text-xs text-slate-400">
+                    {restaurant.subscription_status || "active"}
+                  </p>
+                </td>
+                <td className="px-6 py-4 text-sm text-slate-600">
+                  {formatDate(restaurant.created_at)}
+                </td>
+                <td className="px-6 py-4">
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => onDetails(restaurant)}
+                      className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                    >
+                      Details
+                    </button>
+                    {status !== "active" ? (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => onStatus(restaurant, "approve")}
+                        className="rounded-lg bg-primary px-3 py-2 text-xs font-bold text-white hover:bg-primary/90 disabled:opacity-60"
+                      >
+                        Activate
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => onStatus(restaurant, "suspend")}
+                        className="rounded-lg bg-error px-3 py-2 text-xs font-bold text-white hover:bg-error/90 disabled:opacity-60"
+                      >
+                        Suspend
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => onOpen(restaurant)}
+                      className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                    >
+                      {actionId === `open:${restaurant.id}` ? "Opening..." : "Open"}
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }

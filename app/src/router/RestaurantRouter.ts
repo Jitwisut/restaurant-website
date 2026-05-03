@@ -32,10 +32,42 @@ export const RestaurantRouter = (app: Elysia) => {
         }),
       })
       .get("/me", RestaurantController.me)
+      .get("/settings", RestaurantController.settings)
+      .put("/settings", RestaurantController.updateSettings, {
+        body: t.Object({
+          profile: t.Optional(t.Record(t.String(), t.Any())),
+          business_hours: t.Optional(t.Record(t.String(), t.Any())),
+          account_security: t.Optional(t.Record(t.String(), t.Any())),
+          team_settings: t.Optional(t.Record(t.String(), t.Any())),
+          order_settings: t.Optional(t.Record(t.String(), t.Any())),
+          table_qr_settings: t.Optional(t.Record(t.String(), t.Any())),
+          menu_settings: t.Optional(t.Record(t.String(), t.Any())),
+          notification_settings: t.Optional(t.Record(t.String(), t.Any())),
+          danger_zone: t.Optional(t.Record(t.String(), t.Any())),
+        }),
+      })
+      .put("/account/password", RestaurantController.changePassword, {
+        body: t.Object({
+          current_password: t.String(),
+          new_password: t.String(),
+        }),
+      })
       .get("/subscription", RestaurantController.subscription)
       .post("/subscription/request-renewal", RestaurantController.requestRenewal, {
         body: t.Object({
           note: t.Optional(t.String()),
+        }),
+      })
+      .get("/billing/requests", RestaurantController.billingRequests)
+      .post("/billing/requests", RestaurantController.createBillingRequest, {
+        body: t.Object({
+          plan_code: t.Optional(t.String()),
+          months: t.Optional(t.Number({ minimum: 1, maximum: 24 })),
+          amount: t.Optional(t.Number()),
+          note: t.Optional(t.String()),
+          proof_base64: t.Optional(t.String()),
+          proof_mime: t.Optional(t.String()),
+          proof_filename: t.Optional(t.String()),
         }),
       })
       .post("/subscription/run-cycle", RestaurantController.runSubscriptionCycle)

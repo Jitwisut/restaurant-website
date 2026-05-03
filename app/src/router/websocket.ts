@@ -16,6 +16,10 @@ import {
   getRestaurantStatusById,
   normalizeRestaurantId,
 } from "../middleware/restaurantScope";
+import {
+  getRestaurantSettings,
+  isWithinBusinessHours,
+} from "../lib/restaurantSettings";
 
 const db = getDB();
 
@@ -73,6 +77,7 @@ interface Client {
 }
 
 const clients = new Map<string, Client>();
+const lastSeen = new Map<string, string>();
 const td = new TextDecoder();
 
 function clientKey(restaurantId: string, username: string) {
@@ -83,11 +88,33 @@ function getClient(restaurantId: string, username: string) {
   return clients.get(clientKey(restaurantId, username));
 }
 
+export function getRestaurantPresence(restaurantId: string | number) {
+  const prefix = `${restaurantId}:`;
+  const active = new Set(
+    Array.from(clients.keys())
+      .filter((key) => key.startsWith(prefix))
+      .map((key) => key.slice(prefix.length)),
+  );
+  const seen = new Map(
+    Array.from(lastSeen.entries())
+      .filter(([key]) => key.startsWith(prefix))
+      .map(([key, value]) => [key.slice(prefix.length), value]),
+  );
+
+  return { active, seen };
+}
+
 function mapJwtRoleToSocketRole(role: JwtRole): Role {
   if (role === "owner" || role === "staff" || role === "superadmin") {
     return "admin";
   }
   return role;
+}
+
+function isKnownJwtRole(role: unknown): role is JwtRole {
+  return ["user", "kitchen", "admin", "owner", "staff", "superadmin"].includes(
+    String(role),
+  );
 }
 
 async function validateTable(
@@ -163,15 +190,43 @@ async function saveOrderToDb(order: {
   session?: UUID;
 }) {
   try {
+    const settingsPayload = await getRestaurantSettings(Number(order.restaurant_id));
+    const orderSettings = settingsPayload?.settings?.order_settings || {};
+    const serviceChargeRate =
+      Number(orderSettings.serviceChargePercent || 0) / 100;
+    const taxRate = Number(orderSettings.taxPercent || 0) / 100;
+    const items = order.menu?.items;
+    const subtotal = Array.isArray(items)
+      ? items.reduce(
+          (sum: number, item: any) =>
+            sum + Number(item.price || 0) * Number(item.qty || 0),
+          0,
+        )
+      : 0;
+    const serviceChargeAmount = Number((subtotal * serviceChargeRate).toFixed(2));
+    const taxAmount = Number(
+      ((subtotal + serviceChargeAmount) * taxRate).toFixed(2),
+    );
+    const grandTotal = subtotal + serviceChargeAmount + taxAmount;
+
     await db.query("BEGIN");
     await db.query(
       `INSERT INTO orders
-        (id, table_number, customer_session, status, updated_at, restaurant_id)
-       VALUES ($1, $2, $3, 'pending', NOW(), $4)`,
-      [order.id, order.table_number, order.session, order.restaurant_id],
+        (id, table_number, customer_session, status, updated_at, restaurant_id,
+         subtotal, service_charge_amount, tax_amount, grand_total)
+       VALUES ($1, $2, $3, 'pending', NOW(), $4, $5, $6, $7, $8)`,
+      [
+        order.id,
+        order.table_number,
+        order.session,
+        order.restaurant_id,
+        subtotal,
+        serviceChargeAmount,
+        taxAmount,
+        grandTotal,
+      ],
     );
 
-    const items = order.menu?.items;
     if (Array.isArray(items)) {
       for (const item of items) {
         await db.query(
@@ -266,7 +321,13 @@ function ensureOrderStatus(x: any): x is MsgOrderStatus {
 async function resolvePayload(ws: any) {
   const token = ws.data.query.token;
   const jwt = ws.data.jwt;
-  return token ? await jwt.verify(token) : null;
+  if (!token || !jwt) return null;
+
+  try {
+    return await jwt.verify(token);
+  } catch {
+    return null;
+  }
 }
 
 export const web = (app: Elysia) => {
@@ -304,8 +365,17 @@ export const web = (app: Elysia) => {
       }
 
       const username = String(payload.username);
+      if (!username || !isKnownJwtRole(payload.role)) {
+        sendJSON((ws as any).raw, {
+          type: "error",
+          message: "Invalid websocket token payload",
+        });
+        (ws as any).raw.close(1008, "Invalid token payload");
+        return;
+      }
+
       const jwtRole = payload.role as JwtRole;
-      const role = mapJwtRoleToSocketRole(payload.role);
+      const role = mapJwtRoleToSocketRole(jwtRole);
       const restaurantId = String(normalizeRestaurantId(payload.restaurant_id));
 
       if (jwtRole !== "superadmin") {
@@ -360,7 +430,16 @@ export const web = (app: Elysia) => {
 
     async message(ws, msg) {
       const payload = await resolvePayload(ws as any);
-      const username = payload?.username || (ws.data.params.user as string);
+      if (!payload || !isKnownJwtRole(payload.role)) {
+        sendJSON(ws as any, {
+          type: "error",
+          message: "Unauthorized websocket message",
+        });
+        (ws as any).raw?.close?.(1008, "Unauthorized");
+        return;
+      }
+
+      const username = String(payload.username);
       const restaurantId = payload
         ? String(normalizeRestaurantId(payload.restaurant_id))
         : "";
@@ -401,7 +480,9 @@ export const web = (app: Elysia) => {
 
     async close(ws) {
       const payload = await resolvePayload(ws as any);
-      const username = payload?.username || (ws.data.params.user as string);
+      if (!payload) return;
+
+      const username = String(payload.username);
       const restaurantId = payload
         ? String(normalizeRestaurantId(payload.restaurant_id))
         : "";
@@ -411,6 +492,7 @@ export const web = (app: Elysia) => {
         const restSockets = getRestaurantSockets(client.restaurant_id);
         restSockets[client.role].delete(username);
         clients.delete(clientKey(client.restaurant_id, username));
+        lastSeen.set(clientKey(client.restaurant_id, username), new Date().toISOString());
       }
     },
   });
@@ -484,6 +566,24 @@ async function routeMessage(
           return;
         }
       }
+      const settingsPayload = await getRestaurantSettings(
+        Number(sender.restaurant_id),
+      );
+      if (settingsPayload?.settings?.danger_zone?.temporaryClosed) {
+        sendJSON(ws, {
+          type: "error",
+          message: "Restaurant is temporarily closed",
+        });
+        return;
+      }
+      const businessHours = isWithinBusinessHours(settingsPayload?.settings);
+      if (!businessHours.open) {
+        sendJSON(ws, {
+          type: "error",
+          message: businessHours.reason || "Restaurant is closed",
+        });
+        return;
+      }
 
       if (sender.role !== "user") {
         sendJSON(ws, {
@@ -532,7 +632,6 @@ async function routeMessage(
         });
         return;
       }
-
       const kitchenClients = Array.from(restSockets.kitchen.values());
       if (kitchenClients.length === 0) {
         sendJSON(ws, {

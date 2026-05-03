@@ -8,6 +8,7 @@ import {
     createMockImageFile,
     ensureTestRestaurant,
 } from "./helpers/testUtils";
+import { getTestDB } from "./setup";
 
 /**
  * Admin Controller Tests
@@ -15,6 +16,9 @@ import {
  */
 
 const jwtsecret = process.env.JWT_SECRET || "test-secret-key";
+const db = getTestDB();
+const ANALYTICS_RESTAURANT_ID = 901;
+const ANALYTICS_OTHER_RESTAURANT_ID = 902;
 
 const createTestApp = () => {
     return new Elysia()
@@ -85,6 +89,130 @@ describe("Admin Controller - Get All Users", () => {
     });
 });
 
+describe("Admin Controller - Analytics", () => {
+    test("should return completed-sales analytics for the current restaurant", async () => {
+        const app = createTestApp();
+        await ensureTestRestaurant(ANALYTICS_RESTAURANT_ID);
+        await ensureTestRestaurant(ANALYTICS_OTHER_RESTAURANT_ID);
+
+        const ownOrderId = `analytics-own-${Date.now()}`;
+        const otherOrderId = `analytics-other-${Date.now()}`;
+
+        await db.query("DELETE FROM order_items WHERE order_id LIKE 'analytics-%'");
+        await db.query("DELETE FROM orders WHERE id LIKE 'analytics-%'");
+
+        await db.query(
+            `INSERT INTO orders (
+                id,
+                table_number,
+                customer_session,
+                status,
+                restaurant_id,
+                subtotal,
+                grand_total,
+                payment_status,
+                paid_at,
+                completed_at,
+                created_at
+             )
+             VALUES
+             ($1, 1, 'session-own', 'completed', $3, 300, 300, 'paid', NOW(), NOW(), NOW()),
+             ($2, 1, 'session-other', 'completed', $4, 2500, 2500, 'paid', NOW(), NOW(), NOW())`,
+            [
+                ownOrderId,
+                otherOrderId,
+                ANALYTICS_RESTAURANT_ID,
+                ANALYTICS_OTHER_RESTAURANT_ID,
+            ],
+        );
+
+        await db.query(
+            `INSERT INTO order_items (order_id, menu_item_name, quantity, price, restaurant_id)
+             VALUES
+             ($1, 'Pad Thai', 2, 120, $2),
+             ($1, 'Thai Tea', 1, 60, $2),
+             ($3, 'Hidden Item', 5, 500, $4)`,
+            [
+                ownOrderId,
+                ANALYTICS_RESTAURANT_ID,
+                otherOrderId,
+                ANALYTICS_OTHER_RESTAURANT_ID,
+            ],
+        );
+
+        const response = await app.handle(
+            new Request("http://localhost/admin/analytics?days=7", {
+                method: "GET",
+                headers: authHeaders({ restaurant_id: ANALYTICS_RESTAURANT_ID }),
+            }),
+        );
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+
+        expect(data.summary.totalRevenue).toBe(300);
+        expect(data.summary.orderCount).toBe(1);
+        expect(data.summary.avgOrderValue).toBe(300);
+        expect(data.summary.bestOrderValue).toBe(300);
+        expect(Array.isArray(data.salesSeries)).toBe(true);
+        expect(data.salesSeries).toHaveLength(7);
+        expect(data.salesSeries[data.salesSeries.length - 1].revenue).toBe(300);
+        expect(data.topItems[0].name).toBe("Pad Thai");
+        expect(data.topItems[0].revenue).toBe(240);
+    });
+
+    test("should ignore unpaid, cancelled, refunded, and voided orders", async () => {
+        const app = createTestApp();
+        await ensureTestRestaurant(ANALYTICS_RESTAURANT_ID);
+
+        const ids = [
+            `analytics-unpaid-${Date.now()}`,
+            `analytics-cancelled-${Date.now()}`,
+            `analytics-refunded-${Date.now()}`,
+            `analytics-voided-${Date.now()}`,
+        ];
+
+        await db.query("DELETE FROM order_items WHERE order_id LIKE 'analytics-%'");
+        await db.query("DELETE FROM orders WHERE id LIKE 'analytics-%'");
+
+        await db.query(
+            `INSERT INTO orders (
+                id,
+                table_number,
+                customer_session,
+                status,
+                restaurant_id,
+                grand_total,
+                payment_status,
+                paid_at,
+                refunded_at,
+                voided_at
+             )
+             VALUES
+             ($1, 1, 'session-unpaid', 'completed', $5, 100, 'unpaid', NULL, NULL, NULL),
+             ($2, 1, 'session-cancelled', 'cancelled', $5, 200, 'paid', NOW(), NULL, NULL),
+             ($3, 1, 'session-refunded', 'completed', $5, 300, 'paid', NOW(), NOW(), NULL),
+             ($4, 1, 'session-voided', 'completed', $5, 400, 'paid', NOW(), NULL, NOW())`,
+            [...ids, ANALYTICS_RESTAURANT_ID],
+        );
+
+        const response = await app.handle(
+            new Request("http://localhost/admin/analytics?days=7", {
+                method: "GET",
+                headers: authHeaders({ restaurant_id: ANALYTICS_RESTAURANT_ID }),
+            }),
+        );
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+
+        expect(data.summary.totalRevenue).toBe(0);
+        expect(data.summary.orderCount).toBe(0);
+        expect(data.salesSeries.every((day: any) => day.revenue === 0)).toBe(true);
+        expect(data.topItems).toHaveLength(0);
+    });
+});
+
 describe("Admin Controller - Create User", () => {
     test("should successfully create a new user", async () => {
         const app = createTestApp();
@@ -104,6 +232,12 @@ describe("Admin Controller - Create User", () => {
         expect(response.status).toBe(201);
         const data = await response.json();
         expect(data.message).toContain("Success");
+
+        const audit = await db.query(
+            "SELECT * FROM superadmin_audit_logs WHERE action=$1 AND restaurant_id=$2",
+            ["admin.user.created", 1],
+        );
+        expect(audit.rowCount).toBeGreaterThan(0);
     });
 
     test("should reject user creation with missing fields", async () => {
@@ -257,6 +391,12 @@ describe("Admin Controller - Update User", () => {
         expect(response.status).toBe(200);
         const data = await response.json();
         expect(data.message).toContain("Success");
+
+        const audit = await db.query(
+            "SELECT * FROM superadmin_audit_logs WHERE action=$1 AND restaurant_id=$2",
+            ["admin.user.updated", 1],
+        );
+        expect(audit.rowCount).toBeGreaterThan(0);
     });
 
     test("should update user role", async () => {
@@ -328,6 +468,12 @@ describe("Admin Controller - Delete User", () => {
         expect(response.status).toBe(201);
         const data = await response.json();
         expect(data.message).toContain("Success Delete");
+
+        const audit = await db.query(
+            "SELECT * FROM superadmin_audit_logs WHERE action=$1 AND restaurant_id=$2",
+            ["admin.user.deleted", 1],
+        );
+        expect(audit.rowCount).toBeGreaterThan(0);
     });
 
     test("should reject delete without username", async () => {
@@ -369,6 +515,146 @@ describe("Admin Controller - Upload Menu Data", () => {
         expect(response.status).toBe(200);
         const data = await response.json();
         expect(data.message).toBe("Success");
+    });
+
+    test("should successfully upload menu item without image and write audit", async () => {
+        const app = createTestApp();
+        const name = `No Image Dish ${Date.now()}`;
+
+        const formData = new FormData();
+        formData.append("name", name);
+        formData.append("price", "175");
+        formData.append("category", "main");
+        formData.append("description", "No image needed");
+        formData.append("ingredients", "rice, egg");
+        formData.append("isAvailable", "true");
+
+        const response = await app.handle(
+            new Request("http://localhost/admin/upload-menu", {
+                method: "POST",
+                headers: authHeaders(),
+                body: formData,
+            })
+        );
+
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.menu.name).toBe(name);
+        expect(data.menu.image).toBeNull();
+        expect(data.menu.ingredients).toBe("rice, egg");
+        expect(data.menu.isAvailable).toBe(true);
+
+        const audit = await db.query(
+            "SELECT * FROM superadmin_audit_logs WHERE action=$1 AND restaurant_id=$2",
+            ["admin.menu.created", 1],
+        );
+        expect(audit.rowCount).toBeGreaterThan(0);
+    });
+
+    test("should update menu only in the token restaurant and write audit", async () => {
+        const app = createTestApp();
+        await ensureTestRestaurant(ANALYTICS_OTHER_RESTAURANT_ID);
+        const ownName = `Menu Update Own ${Date.now()}`;
+        const otherName = `Menu Update Other ${Date.now()}`;
+
+        const own = await db.query(
+            `INSERT INTO menu_new (name, price, category, restaurant_id)
+             VALUES ($1, 99, 'main', $2)
+             RETURNING id`,
+            [ownName, 1],
+        );
+        const other = await db.query(
+            `INSERT INTO menu_new (name, price, category, restaurant_id)
+             VALUES ($1, 299, 'main', $2)
+             RETURNING id`,
+            [otherName, ANALYTICS_OTHER_RESTAURANT_ID],
+        );
+
+        const formData = new FormData();
+        formData.append("name", `${ownName} Updated`);
+        formData.append("price", "125");
+        formData.append("category", "special");
+        formData.append("description", "Updated description");
+        formData.append("ingredients", "updated ingredients");
+        formData.append("isAvailable", "false");
+
+        const response = await app.handle(
+            new Request(`http://localhost/admin/menu/${own.rows[0].id}`, {
+                method: "PATCH",
+                headers: authHeaders(),
+                body: formData,
+            }),
+        );
+        expect(response.status).toBe(200);
+        const data = await response.json();
+        expect(data.menu.name).toBe(`${ownName} Updated`);
+        expect(data.menu.isAvailable).toBe(false);
+
+        const crossTenantForm = new FormData();
+        crossTenantForm.append("name", "Should Not Update");
+        crossTenantForm.append("price", "1");
+        const blocked = await app.handle(
+            new Request(`http://localhost/admin/menu/${other.rows[0].id}`, {
+                method: "PATCH",
+                headers: authHeaders(),
+                body: crossTenantForm,
+            }),
+        );
+        expect(blocked.status).toBe(404);
+
+        const audit = await db.query(
+            "SELECT * FROM superadmin_audit_logs WHERE action=$1 AND restaurant_id=$2",
+            ["admin.menu.updated", 1],
+        );
+        expect(audit.rowCount).toBeGreaterThan(0);
+    });
+
+    test("should delete menu only in the token restaurant and write audit", async () => {
+        const app = createTestApp();
+        await ensureTestRestaurant(ANALYTICS_OTHER_RESTAURANT_ID);
+        const own = await db.query(
+            `INSERT INTO menu_new (name, price, restaurant_id)
+             VALUES ($1, 88, $2)
+             RETURNING id`,
+            [`Menu Delete Own ${Date.now()}`, 1],
+        );
+        const other = await db.query(
+            `INSERT INTO menu_new (name, price, restaurant_id)
+             VALUES ($1, 188, $2)
+             RETURNING id`,
+            [`Menu Delete Other ${Date.now()}`, ANALYTICS_OTHER_RESTAURANT_ID],
+        );
+
+        const blocked = await app.handle(
+            new Request(`http://localhost/admin/menu/${other.rows[0].id}`, {
+                method: "DELETE",
+                headers: authHeaders(),
+            }),
+        );
+        expect(blocked.status).toBe(404);
+
+        const response = await app.handle(
+            new Request(`http://localhost/admin/menu/${own.rows[0].id}`, {
+                method: "DELETE",
+                headers: authHeaders(),
+            }),
+        );
+        expect(response.status).toBe(200);
+
+        const deleted = await db.query("SELECT 1 FROM menu_new WHERE id=$1", [
+            own.rows[0].id,
+        ]);
+        const stillThere = await db.query("SELECT 1 FROM menu_new WHERE id=$1", [
+            other.rows[0].id,
+        ]);
+        expect(deleted.rowCount).toBe(0);
+        expect(stillThere.rowCount).toBe(1);
+
+        const audit = await db.query(
+            "SELECT * FROM superadmin_audit_logs WHERE action=$1 AND restaurant_id=$2",
+            ["admin.menu.deleted", 1],
+        );
+        expect(audit.rowCount).toBeGreaterThan(0);
     });
 
     test("should reject menu upload without name", async () => {

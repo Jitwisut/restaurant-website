@@ -1,7 +1,7 @@
 "use client";
 
-import Image from "next/image";
 import axios from "axios";
+import QRCode from "qrcode";
 import toast, { Toaster } from "react-hot-toast";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
@@ -10,6 +10,55 @@ import { useAuth } from "@/app/components/AuthProvider";
 
 const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL;
 const guestTokenKey = (sessionHash) => `restaurantos.guest.${sessionHash}`;
+
+function formatTlv(id, value) {
+  const text = String(value ?? "");
+  return `${id}${String(text.length).padStart(2, "0")}${text}`;
+}
+
+function crc16Ccitt(value) {
+  let crc = 0xffff;
+  for (let index = 0; index < value.length; index += 1) {
+    crc ^= value.charCodeAt(index) << 8;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = crc & 0x8000 ? (crc << 1) ^ 0x1021 : crc << 1;
+      crc &= 0xffff;
+    }
+  }
+  return crc.toString(16).toUpperCase().padStart(4, "0");
+}
+
+function normalizePromptPayId(type, value) {
+  const raw = String(value || "").replace(/[^\d]/g, "");
+  if (type === "phone") {
+    if (raw.startsWith("66")) return `00${raw}`;
+    if (raw.startsWith("0")) return `0066${raw.slice(1)}`;
+  }
+  return raw;
+}
+
+function buildPromptPayPayload(orderSettings, amount) {
+  if (orderSettings.promptPayType === "bank_account") return null;
+  const target = normalizePromptPayId(
+    orderSettings.promptPayType,
+    orderSettings.promptPayId,
+  );
+  if (!target) return null;
+
+  const merchantAccount = formatTlv("00", "A000000677010111") + formatTlv("01", target);
+  const withoutCrc = [
+    formatTlv("00", "01"),
+    formatTlv("01", "12"),
+    formatTlv("29", merchantAccount),
+    formatTlv("53", "764"),
+    formatTlv("54", Number(amount || 0).toFixed(2)),
+    formatTlv("58", "TH"),
+    formatTlv("59", (orderSettings.promptPayAccountName || "RESTAURANT").slice(0, 25)),
+    formatTlv("60", "BANGKOK"),
+  ].join("");
+  const payload = `${withoutCrc}6304`;
+  return `${payload}${crc16Ccitt(payload)}`;
+}
 
 const getCategoryIcon = (category) => {
   const lower = category.toLowerCase();
@@ -27,12 +76,14 @@ export default function OrderPage() {
 
   const [table, setTable] = useState(null);
   const [menu, setMenu] = useState([]);
+  const [settings, setSettings] = useState(null);
   const [cart, setCart] = useState([]);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [wsReady, setWsReady] = useState(false);
   const [wsError, setWsError] = useState("");
   const [guestToken, setGuestToken] = useState(null);
+  const [promptPayQrDataUrl, setPromptPayQrDataUrl] = useState("");
 
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
@@ -89,13 +140,12 @@ export default function OrderPage() {
 
         setGuestToken(nextGuestToken);
 
-        const menuResponse = await axios.get(`${API_BASE}/menu/get`, {
-          headers: {
-            Authorization: `Bearer ${nextGuestToken}`,
-          },
-        });
+        const menuResponse = await axios.get(
+          `${API_BASE}/tables/session/${sessionHash}/menu`,
+        );
 
         setTable(tableResponse.data.table);
+        setSettings(menuResponse.data.settings || null);
         setMenu(
           Array.isArray(menuResponse.data)
             ? menuResponse.data
@@ -176,6 +226,16 @@ export default function OrderPage() {
           toast.error(payload.message || "สั่งอาหารไม่สำเร็จ");
         }
         if (payload.type === "order_status") {
+          if (settings?.notification_settings?.orderAlertSound) {
+            try {
+              const audio = new Audio(
+                "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=",
+              );
+              audio.play().catch(() => undefined);
+            } catch {
+              // ignore blocked browser audio
+            }
+          }
           toast(payload.status || "อัปเดตสถานะออเดอร์");
         }
         if (payload.type === "table_closed") {
@@ -188,7 +248,12 @@ export default function OrderPage() {
     };
 
     return () => socket.close();
-  }, [closeTableSession, sessionHash, wsToken]);
+  }, [
+    closeTableSession,
+    sessionHash,
+    settings?.notification_settings?.orderAlertSound,
+    wsToken,
+  ]);
 
   const categories = useMemo(() => {
     const cats = [...new Set(menu.map((item) => item.category || "General"))];
@@ -211,14 +276,74 @@ export default function OrderPage() {
     () => cart.reduce((sum, item) => sum + item.qty * Number(item.price), 0),
     [cart],
   );
+  const orderSettings = useMemo(
+    () => settings?.order_settings || {},
+    [settings?.order_settings],
+  );
+  const tableQrSettings = settings?.table_qr_settings || {};
+  const profileSettings = settings?.profile || {};
 
   const totalItems = useMemo(
     () => cart.reduce((sum, item) => sum + item.qty, 0),
     [cart]
   );
 
-  const taxAmount = useMemo(() => (totalPrice * 0.08).toFixed(2), [totalPrice]);
-  const finalTotal = useMemo(() => (totalPrice + Number(taxAmount)).toFixed(2), [totalPrice, taxAmount]);
+  const serviceChargeAmount = useMemo(
+    () =>
+      (
+        totalPrice *
+        (Number(orderSettings.serviceChargePercent || 0) / 100)
+      ).toFixed(2),
+    [orderSettings.serviceChargePercent, totalPrice],
+  );
+  const taxAmount = useMemo(
+    () =>
+      (
+        (totalPrice + Number(serviceChargeAmount)) *
+        (Number(orderSettings.taxPercent || 0) / 100)
+      ).toFixed(2),
+    [orderSettings.taxPercent, serviceChargeAmount, totalPrice],
+  );
+  const finalTotal = useMemo(
+    () =>
+      (
+        totalPrice +
+        Number(serviceChargeAmount) +
+        Number(taxAmount)
+      ).toFixed(2),
+    [serviceChargeAmount, taxAmount, totalPrice],
+  );
+  const promptPayEnabled = Boolean(
+    orderSettings.paymentMethods?.qrPromptPay &&
+      (orderSettings.promptPayId ||
+        orderSettings.bankAccountNumber ||
+        orderSettings.promptPayAccountName),
+  );
+  const placeholderImageUrl = settings?.menu_settings?.placeholderImageUrl || "";
+
+  useEffect(() => {
+    let cancelled = false;
+    const payload = promptPayEnabled
+      ? buildPromptPayPayload(orderSettings, finalTotal)
+      : null;
+
+    if (!payload) {
+      setPromptPayQrDataUrl("");
+      return;
+    }
+
+    QRCode.toDataURL(payload, { margin: 1, width: 220 })
+      .then((dataUrl) => {
+        if (!cancelled) setPromptPayQrDataUrl(dataUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setPromptPayQrDataUrl("");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [finalTotal, orderSettings, promptPayEnabled]);
 
   const addToCart = (item) => {
     setCart((current) => {
@@ -300,7 +425,7 @@ export default function OrderPage() {
       {/* TopNavBar */}
       <header className="bg-white dark:bg-slate-900 font-sans tracking-tight docked full-width top-0 border-b border-slate-200 dark:border-slate-800 shadow-sm flex justify-between items-center w-full px-8 h-16 sticky z-50">
         <div className="text-xl font-bold text-indigo-900 dark:text-white">
-          Lumière Dining
+          {profileSettings.name || "Lumière Dining"}
         </div>
         <div className="flex-1 flex justify-center px-8">
           <div className="relative w-full max-w-md hidden md:block">
@@ -420,7 +545,8 @@ export default function OrderPage() {
                 {selectedCategory === "All" ? "All Menu" : selectedCategory}
               </h1>
               <p className="font-body-md text-body-md text-on-surface-variant">
-                Exceptional cuts and refined flavors, expertly prepared.
+                {tableQrSettings.customerWelcomeMessage ||
+                  "Exceptional cuts and refined flavors, expertly prepared."}
               </p>
             </div>
             
@@ -433,14 +559,15 @@ export default function OrderPage() {
                     className="bg-surface-container-lowest border border-outline-variant rounded-lg overflow-hidden shadow-[0_4px_12px_rgba(45,62,97,0.04)] flex flex-col hover:shadow-[0_8px_20px_rgba(45,62,97,0.08)] transition-shadow duration-200"
                   >
                     <div className="h-48 overflow-hidden relative">
-                      {item.image ? (
-                        <Image
-                          src={item.image}
-                          alt={item.name}
-                          fill
-                          className="object-cover"
-                          sizes="(max-width: 768px) 100vw, 33vw"
-                        />
+                      {item.image || placeholderImageUrl ? (
+                        <>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={item.image || placeholderImageUrl}
+                            alt={item.name}
+                            className="h-full w-full object-cover"
+                          />
+                        </>
                       ) : (
                         <div className="w-full h-full bg-slate-100 flex items-center justify-center text-slate-400">
                            No Image
@@ -570,14 +697,50 @@ export default function OrderPage() {
                   ฿{totalPrice.toFixed(2)}
                 </span>
               </div>
+              <div className="flex justify-between items-center mb-2">
+                <span className="font-body-sm text-body-sm text-on-surface-variant">
+                  Service charge ({Number(orderSettings.serviceChargePercent || 0)}%)
+                </span>
+                <span className="font-body-md text-body-md text-on-surface">
+                  ฿{serviceChargeAmount}
+                </span>
+              </div>
               <div className="flex justify-between items-center mb-4">
                 <span className="font-body-sm text-body-sm text-on-surface-variant">
-                  Tax (8%)
+                  Tax ({Number(orderSettings.taxPercent || 0)}%)
                 </span>
                 <span className="font-body-md text-body-md text-on-surface">
                   ฿{taxAmount}
                 </span>
               </div>
+              {promptPayEnabled && (
+                <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
+                  <p className="font-bold">
+                    {orderSettings.promptPayType === "bank_account"
+                      ? "โอนบัญชีธนาคาร"
+                      : "QR PromptPay"}
+                  </p>
+                  {promptPayQrDataUrl && (
+                    <>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={promptPayQrDataUrl}
+                        alt="PromptPay QR"
+                        className="mx-auto my-3 h-40 w-40 rounded-lg bg-white p-2"
+                      />
+                    </>
+                  )}
+                  <p>
+                    {orderSettings.promptPayType === "bank_account"
+                      ? `บัญชี ${orderSettings.bankAccountNumber || "-"}`
+                      : `PromptPay ${orderSettings.promptPayId || "-"}`}
+                  </p>
+                  <p>{orderSettings.promptPayAccountName || ""}</p>
+                  <p className="mt-1 text-xs">
+                    ใช้ยอดชำระ ฿{finalTotal} สำหรับสร้าง QR/โอนเงิน
+                  </p>
+                </div>
+              )}
               <div className="flex justify-between items-center mb-6 pt-2 border-t border-outline-variant">
                 <span className="font-h3 text-h3 text-on-surface">Total</span>
                 <span className="font-h3 text-h3 text-primary-container">

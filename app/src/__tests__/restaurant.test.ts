@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import jwt from "@elysiajs/jwt";
 import { Elysia, t } from "elysia";
+import bcryptjs from "bcryptjs";
 import { RestaurantRouter } from "../router/RestaurantRouter";
 import {
   authHeaders,
@@ -220,6 +221,165 @@ describe("Restaurant API", () => {
     expect(renewalResponse.status).toBe(200);
     const renewalData = await renewalResponse.json();
     expect(renewalData.subscription.renewal_requested_at).toBeDefined();
+  });
+
+  test("owner can load and update production admin settings for only their restaurant", async () => {
+    const app = createTestApp();
+    await ensureTestRestaurant(TEST_RESTAURANT_ID, {
+      name: "Settings Restaurant",
+      slug: "settings-restaurant",
+      status: "active",
+    });
+    await ensureTestRestaurant(OTHER_RESTAURANT_ID, {
+      name: "Other Settings Restaurant",
+      slug: "other-settings-restaurant",
+      status: "active",
+    });
+    await db.query(
+      "DELETE FROM restaurant_settings WHERE restaurant_id IN ($1, $2)",
+      [TEST_RESTAURANT_ID, OTHER_RESTAURANT_ID],
+    );
+
+    const loadResponse = await app.handle(
+      new Request("http://localhost/restaurant/settings", {
+        method: "GET",
+        headers: authHeaders({
+          role: "owner",
+          restaurant_id: TEST_RESTAURANT_ID,
+        }),
+      }),
+    );
+    expect(loadResponse.status).toBe(200);
+    const initial = await loadResponse.json();
+    expect(initial.settings.profile.name).toBe("Settings Restaurant");
+
+    const updateResponse = await app.handle(
+      new Request("http://localhost/restaurant/settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders({
+            role: "owner",
+            restaurant_id: TEST_RESTAURANT_ID,
+          }),
+        },
+        body: JSON.stringify({
+          profile: {
+            name: "Updated Settings Restaurant",
+            slug: "updated-settings-restaurant",
+            contactEmail: "ops@example.com",
+            phone: "0812345678",
+            address: "Bangkok",
+          },
+          order_settings: {
+            serviceChargePercent: 10,
+            taxPercent: 7,
+            discountEnabled: true,
+            paymentMethods: { cash: true, bankTransfer: true },
+          },
+          notification_settings: {
+            callStaffSound: false,
+            orderAlertSound: true,
+            kitchenAlertSound: true,
+          },
+        }),
+      }),
+    );
+
+    expect(updateResponse.status).toBe(200);
+    const updated = await updateResponse.json();
+    expect(updated.restaurant.name).toBe("Updated Settings Restaurant");
+    expect(updated.restaurant.slug).toBe("updated-settings-restaurant");
+    expect(updated.settings.profile.contactEmail).toBe("ops@example.com");
+    expect(updated.settings.order_settings.serviceChargePercent).toBe(10);
+
+    const other = await db.query(
+      "SELECT name, slug FROM restaurants WHERE id=$1",
+      [OTHER_RESTAURANT_ID],
+    );
+    expect(other.rows[0].name).toBe("Other Settings Restaurant");
+    expect(other.rows[0].slug).toBe("other-settings-restaurant");
+  });
+
+  test("settings update rejects duplicate restaurant slugs", async () => {
+    const app = createTestApp();
+    await ensureTestRestaurant(TEST_RESTAURANT_ID, {
+      slug: "settings-primary",
+      status: "active",
+    });
+    await ensureTestRestaurant(OTHER_RESTAURANT_ID, {
+      slug: "settings-taken",
+      status: "active",
+    });
+
+    const response = await app.handle(
+      new Request("http://localhost/restaurant/settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders({
+            role: "admin",
+            restaurant_id: TEST_RESTAURANT_ID,
+          }),
+        },
+        body: JSON.stringify({
+          profile: {
+            slug: "settings-taken",
+          },
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(409);
+  });
+
+  test("owner can change their account password with current password", async () => {
+    const app = createTestApp();
+    const suffix = Date.now();
+    const username = `settings-owner-${suffix}`;
+    const email = `${username}@example.com`;
+    const oldPassword = "old-password-123";
+    const newPassword = "new-password-456";
+    await ensureTestRestaurant(TEST_RESTAURANT_ID, {
+      slug: "settings-password",
+      status: "active",
+    });
+    await db.query(
+      `INSERT INTO users (username, email, password, role, restaurant_id)
+       VALUES ($1, $2, $3, 'owner', $4)`,
+      [
+        username,
+        email,
+        await bcryptjs.hash(oldPassword, 10),
+        TEST_RESTAURANT_ID,
+      ],
+    );
+
+    const response = await app.handle(
+      new Request("http://localhost/restaurant/account/password", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders({
+            role: "owner",
+            restaurant_id: TEST_RESTAURANT_ID,
+            email,
+          }),
+        },
+        body: JSON.stringify({
+          current_password: oldPassword,
+          new_password: newPassword,
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const updated = await db.query("SELECT password FROM users WHERE email=$1", [
+      email,
+    ]);
+    expect(await bcryptjs.compare(newPassword, updated.rows[0].password)).toBe(
+      true,
+    );
   });
 
   test("superadmin can renew a suspended restaurant subscription", async () => {

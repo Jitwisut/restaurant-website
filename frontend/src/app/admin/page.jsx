@@ -2,13 +2,177 @@
 
 import Link from "next/link";
 import Swal from "sweetalert2";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import MenuUpload from "../components/menupload";
 import { buildRestaurantPath } from "@/lib/auth";
 import { buildWsUrl, createApiClient } from "@/lib/api";
 import { useAuth } from "../components/AuthProvider";
 import { useRestaurantAccess } from "../components/useRestaurantAccess";
+
+function formatTHB(value) {
+  return new Intl.NumberFormat("th-TH", {
+    style: "currency",
+    currency: "THB",
+    maximumFractionDigits: 2,
+  }).format(Number.isFinite(Number(value)) ? Number(value) : 0);
+}
+
+function formatDayLabel(dateString) {
+  if (!dateString) return "-";
+  return new Intl.DateTimeFormat("th-TH", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    timeZone: "Asia/Bangkok",
+  }).format(new Date(`${dateString}T00:00:00+07:00`));
+}
+
+function formatDateTime(iso) {
+  if (!iso) return "-";
+  return new Intl.DateTimeFormat("th-TH", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "Asia/Bangkok",
+  }).format(new Date(iso));
+}
+
+function formatLastActive(user) {
+  if (user.online_status === "active") return "ตอนนี้";
+  if (!user.last_active_at) return "-";
+  return formatDateTime(user.last_active_at);
+}
+
+function SalesTrendChart({ data = [] }) {
+  const width = 640;
+  const height = 220;
+  const padding = 24;
+  const maxRevenue = Math.max(...data.map((item) => item.revenue || 0), 0);
+  const chartWidth = width - padding * 2;
+  const chartHeight = height - padding * 2;
+
+  const points = data.map((item, index) => {
+    const x =
+      data.length <= 1
+        ? width / 2
+        : padding + (index * chartWidth) / (data.length - 1);
+    const y =
+      maxRevenue <= 0
+        ? height - padding
+        : padding + chartHeight - (item.revenue / maxRevenue) * chartHeight;
+    return { ...item, x, y };
+  });
+
+  const areaPath = points.length
+    ? `M ${points[0].x} ${height - padding} ` +
+      points.map((point) => `L ${point.x} ${point.y}`).join(" ") +
+      ` L ${points[points.length - 1].x} ${height - padding} Z`
+    : "";
+  const linePath = points.length
+    ? `M ${points.map((point) => `${point.x} ${point.y}`).join(" L ")}`
+    : "";
+  const breakdown = data.length > 14 ? data.slice(-7) : data;
+
+  return (
+    <div className="rounded-xl border border-slate-100 bg-white p-md shadow-sm">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-label-md font-bold uppercase tracking-wider text-slate-500">
+            Sales Trend
+          </p>
+          <h3 className="mt-1 font-h3 text-h3 text-primary">
+            Revenue in the last {data.length || 0} days
+          </h3>
+        </div>
+        <div className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+          Completed orders only
+        </div>
+      </div>
+
+      {points.length === 0 ? (
+        <div className="mt-6 rounded-lg border border-dashed border-slate-200 px-4 py-10 text-center text-sm text-slate-500">
+          No sales data available yet.
+        </div>
+      ) : (
+        <>
+          <div className="mt-6 overflow-x-auto">
+            <svg
+              viewBox={`0 0 ${width} ${height}`}
+              className="min-w-[640px]"
+              role="img"
+              aria-label="Sales trend chart"
+            >
+              <defs>
+                <linearGradient id="sales-area" x1="0" x2="0" y1="0" y2="1">
+                  <stop offset="0%" stopColor="#2563eb" stopOpacity="0.28" />
+                  <stop offset="100%" stopColor="#2563eb" stopOpacity="0.04" />
+                </linearGradient>
+              </defs>
+
+              {[0, 1, 2, 3].map((step) => {
+                const y = padding + (chartHeight / 3) * step;
+                return (
+                  <line
+                    key={step}
+                    x1={padding}
+                    x2={width - padding}
+                    y1={y}
+                    y2={y}
+                    stroke="#e2e8f0"
+                    strokeDasharray="4 6"
+                  />
+                );
+              })}
+
+              {areaPath ? <path d={areaPath} fill="url(#sales-area)" /> : null}
+              {linePath ? (
+                <path
+                  d={linePath}
+                  fill="none"
+                  stroke="#2563eb"
+                  strokeWidth="3"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              ) : null}
+
+              {points.map((point) => (
+                <g key={point.date}>
+                  <circle cx={point.x} cy={point.y} r="5" fill="#2563eb" />
+                  <title>{`${formatDayLabel(point.date)}: ${formatTHB(
+                    point.revenue,
+                  )} (${point.orderCount} orders)`}</title>
+                </g>
+              ))}
+            </svg>
+          </div>
+
+          <div className="mt-4 flex items-center justify-between gap-3">
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+              {data.length > 14 ? "Latest 7 days" : "Daily breakdown"}
+            </p>
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
+            {breakdown.map((item) => (
+              <div
+                key={item.date}
+                className="rounded-lg bg-slate-50 px-3 py-2 ring-1 ring-slate-100"
+              >
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  {formatDayLabel(item.date)}
+                </p>
+                <p className="mt-1 text-sm font-semibold text-slate-900">
+                  {formatTHB(item.revenue)}
+                </p>
+                <p className="text-xs text-slate-500">{item.orderCount} orders</p>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 export default function RestaurantDashboard() {
   const { signOut } = useAuth();
@@ -20,6 +184,7 @@ export default function RestaurantDashboard() {
   const api = useMemo(() => createApiClient(auth?.token), [auth?.token]);
 
   const wsRef = useRef(null);
+  const menuImageInputRef = useRef(null);
   const [connected, setConnected] = useState(false);
   const [tables, setTables] = useState([]);
   const [users, setUsers] = useState([]);
@@ -28,12 +193,14 @@ export default function RestaurantDashboard() {
   const [pendingRestaurants, setPendingRestaurants] = useState([]);
   const [restaurantsLoading, setRestaurantsLoading] = useState(false);
   const [restaurantActionId, setRestaurantActionId] = useState(null);
+  const [restaurantSettings, setRestaurantSettings] = useState(null);
   const [showMenu, setShowMenu] = useState(false);
   const [showUserModal, setShowUserModal] = useState(false);
   const [imagePreview, setImagePreview] = useState(null);
   const [submitLoading, setSubmitLoading] = useState(false);
   const [userSubmitting, setUserSubmitting] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
+  const [editingMenu, setEditingMenu] = useState(null);
   const [menuData, setMenuData] = useState({
     name: "",
     price: "",
@@ -48,8 +215,37 @@ export default function RestaurantDashboard() {
     password: "",
     role: "staff",
   });
+  const [activeTab, setActiveTab] = useState("staff");
+  const [staffSearch, setStaffSearch] = useState("");
+  const [menus, setMenus] = useState([]);
+  const [menusLoading, setMenusLoading] = useState(false);
+  const [menuSearch, setMenuSearch] = useState("");
+  const [menuCategory, setMenuCategory] = useState("all");
+  const [menuStatus, setMenuStatus] = useState("all");
+  const [analytics, setAnalytics] = useState({
+    summary: {
+      totalRevenue: 0,
+      orderCount: 0,
+      avgOrderValue: 0,
+      bestOrderValue: 0,
+      openTables: 0,
+    },
+    salesSeries: [],
+    topItems: [],
+  });
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [analyticsError, setAnalyticsError] = useState(null);
+  const [analyticsDays, setAnalyticsDays] = useState(7);
+  const [analyticsUpdatedAt, setAnalyticsUpdatedAt] = useState(null);
 
-  const reservedTables = tables.filter((item) => item.status === "open").length;
+  const reservedTables =
+    analytics.summary.openTables ||
+    tables.filter((item) => item.status === "open").length;
+  const restaurantProfile = restaurantSettings?.profile || {};
+  const menuPlaceholderImage =
+    restaurantSettings?.menu_settings?.placeholderImageUrl || "";
+  const callStaffSoundEnabled =
+    restaurantSettings?.notification_settings?.callStaffSound !== false;
 
   // Keep the page behind dialogs from scrolling.
   useEffect(() => {
@@ -64,6 +260,57 @@ export default function RestaurantDashboard() {
     };
   }, [showUserModal, showMenu]);
 
+  const loadMenus = useCallback(async () => {
+    setMenusLoading(true);
+    try {
+      const response = await api.get("/menu/get");
+      setMenus(response.data.menu || []);
+    } catch (error) {
+      Swal.fire({
+        icon: "error",
+        title: "Load menus failed",
+        text: error.normalizedMessage || "Unable to fetch menus",
+      });
+    } finally {
+      setMenusLoading(false);
+    }
+  }, [api]);
+
+  const loadAnalytics = useCallback(async () => {
+    setAnalyticsLoading(true);
+    setAnalyticsError(null);
+    try {
+      const response = await api.get("/admin/analytics", {
+        params: { days: analyticsDays },
+      });
+      setAnalytics({
+        summary: response.data.summary || {
+          totalRevenue: 0,
+          orderCount: 0,
+          avgOrderValue: 0,
+          bestOrderValue: 0,
+          openTables: 0,
+        },
+        salesSeries: response.data.salesSeries || [],
+        topItems: response.data.topItems || [],
+      });
+      setAnalyticsUpdatedAt(new Date().toISOString());
+    } catch (error) {
+      setAnalyticsError(
+        error.normalizedMessage || "Unable to fetch restaurant analytics",
+      );
+    } finally {
+      setAnalyticsLoading(false);
+    }
+  }, [analyticsDays, api]);
+
+  useEffect(() => {
+    if (!ready || !allowed || !auth?.token) return;
+    if (activeTab === "menu") {
+      loadMenus();
+    }
+  }, [activeTab, allowed, auth?.token, loadMenus, ready]);
+
   const resetUserForm = () => {
     setEditingUser(null);
     setUserForm({
@@ -75,7 +322,7 @@ export default function RestaurantDashboard() {
     setShowUserModal(false);
   };
 
-  const loadUsers = async () => {
+  const loadUsers = useCallback(async () => {
     setUsersLoading(true);
     try {
       const response = await api.get("/admin/getuser");
@@ -90,9 +337,9 @@ export default function RestaurantDashboard() {
     } finally {
       setUsersLoading(false);
     }
-  };
+  }, [api]);
 
-  const loadPendingRestaurants = async () => {
+  const loadPendingRestaurants = useCallback(async () => {
     if (auth?.role !== "superadmin") return;
 
     setRestaurantsLoading(true);
@@ -108,7 +355,16 @@ export default function RestaurantDashboard() {
     } finally {
       setRestaurantsLoading(false);
     }
-  };
+  }, [api, auth?.role]);
+
+  const loadRestaurantSettings = useCallback(async () => {
+    try {
+      const response = await api.get("/restaurant/settings");
+      setRestaurantSettings(response.data.settings || null);
+    } catch {
+      setRestaurantSettings(null);
+    }
+  }, [api]);
 
   const updateRestaurantStatus = async (restaurantId, action) => {
     setRestaurantActionId(`${action}:${restaurantId}`);
@@ -150,6 +406,16 @@ export default function RestaurantDashboard() {
       try {
         const data = JSON.parse(event.data);
         if (data.type === "call_staff") {
+          if (callStaffSoundEnabled) {
+            try {
+              const audio = new Audio(
+                "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=",
+              );
+              audio.play().catch(() => undefined);
+            } catch {
+              // ignore browsers that block notification sounds
+            }
+          }
           Swal.fire({
             title: `โต๊ะ ${data.table_number} เรียกพนักงาน`,
             text: `เวลา ${new Date(data.timestamp).toLocaleTimeString("th-TH")}`,
@@ -163,7 +429,7 @@ export default function RestaurantDashboard() {
     };
 
     return () => socket.close();
-  }, [allowed, auth?.token, auth?.username, ready]);
+  }, [allowed, auth?.token, auth?.username, callStaffSoundEnabled, ready]);
 
   useEffect(() => {
     if (!ready || !allowed || !auth?.token) return;
@@ -187,14 +453,22 @@ export default function RestaurantDashboard() {
   useEffect(() => {
     if (!ready || !allowed || !auth?.token) return;
     loadUsers();
-  }, [allowed, api, auth?.token, ready]);
+    loadRestaurantSettings();
+  }, [allowed, auth?.token, loadRestaurantSettings, loadUsers, ready]);
+
+  useEffect(() => {
+    if (!ready || !allowed || !auth?.token) return;
+    if (activeTab === "staff") {
+      loadAnalytics();
+    }
+  }, [activeTab, allowed, auth?.token, loadAnalytics, ready]);
 
   useEffect(() => {
     if (!ready || !allowed || auth?.role !== "superadmin" || !auth?.token) {
       return;
     }
     loadPendingRestaurants();
-  }, [allowed, api, auth?.role, auth?.token, ready]);
+  }, [allowed, auth?.role, auth?.token, loadPendingRestaurants, ready]);
 
   const handleImageChange = (event) => {
     const file = event.target.files?.[0];
@@ -207,6 +481,7 @@ export default function RestaurantDashboard() {
 
   const resetMenuForm = () => {
     setShowMenu(false);
+    setEditingMenu(null);
     setMenuData({
       name: "",
       price: "",
@@ -216,6 +491,9 @@ export default function RestaurantDashboard() {
       isAvailable: true,
     });
     setImagePreview(null);
+    if (menuImageInputRef.current) {
+      menuImageInputRef.current.value = "";
+    }
   };
 
   const closeOpenModals = () => {
@@ -242,16 +520,20 @@ export default function RestaurantDashboard() {
       formData.append("ingredients", menuData.ingredients || "");
       formData.append("isAvailable", String(menuData.isAvailable));
 
-      const imageInput = document.querySelector('input[type="file"]');
-      if (imageInput?.files?.[0]) {
-        formData.append("image", imageInput.files[0]);
+      const imageFile = menuImageInputRef.current?.files?.[0];
+      if (imageFile) {
+        formData.append("image", imageFile);
       }
 
-      await api.post("/admin/upload-menu", formData, {
-        headers: {
-          "Content-Type": "multipart/form-data",
-        },
-      });
+      if (editingMenu) {
+        await api.patch(`/admin/menu/${editingMenu.id}`, formData, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+      } else {
+        await api.post("/admin/upload-menu", formData, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+      }
 
       Swal.fire({
         icon: "success",
@@ -260,6 +542,7 @@ export default function RestaurantDashboard() {
         showConfirmButton: false,
       });
       resetMenuForm();
+      await loadMenus();
     } catch (error) {
       await showAlertReplacingModal({
         icon: "error",
@@ -268,6 +551,82 @@ export default function RestaurantDashboard() {
       });
     } finally {
       setSubmitLoading(false);
+    }
+  };
+
+  const startEditMenu = (item) => {
+    setEditingMenu(item);
+    setMenuData({
+      name: item.name || "",
+      price: item.price || "",
+      description: item.description || "",
+      category: item.category || "",
+      ingredients: item.ingredients || "",
+      isAvailable: item.isAvailable !== false,
+    });
+    setImagePreview(item.image || null);
+    if (menuImageInputRef.current) {
+      menuImageInputRef.current.value = "";
+    }
+    setShowMenu(true);
+  };
+
+  const toggleMenuAvailability = async (item) => {
+    const nextAvailable = item.isAvailable === false;
+    const formData = new FormData();
+    formData.append("name", item.name || "");
+    formData.append("price", item.price || "");
+    formData.append("category", item.category || "");
+    formData.append("description", item.description || "");
+    formData.append("ingredients", item.ingredients || "");
+    formData.append("isAvailable", String(nextAvailable));
+
+    try {
+      await api.patch(`/admin/menu/${item.id}`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      setMenus((current) =>
+        current.map((menu) =>
+          menu.id === item.id ? { ...menu, isAvailable: nextAvailable } : menu,
+        ),
+      );
+    } catch (error) {
+      Swal.fire({
+        icon: "error",
+        title: "Update menu status failed",
+        text: error.normalizedMessage || "Please try again",
+      });
+    }
+  };
+
+  const handleDeleteMenu = async (item) => {
+    const result = await Swal.fire({
+      icon: "warning",
+      title: `Delete ${item.name}?`,
+      text: "This menu item will be permanently deleted",
+      showCancelButton: true,
+      confirmButtonText: "Delete",
+      cancelButtonText: "Cancel",
+      confirmButtonColor: "#dc2626",
+    });
+
+    if (!result.isConfirmed) return;
+
+    try {
+      await api.delete(`/admin/menu/${item.id}`);
+      setMenus((current) => current.filter((menu) => menu.id !== item.id));
+      Swal.fire({
+        icon: "success",
+        title: "Menu deleted",
+        timer: 1200,
+        showConfirmButton: false,
+      });
+    } catch (error) {
+      Swal.fire({
+        icon: "error",
+        title: "Delete menu failed",
+        text: error.normalizedMessage || "Please try again",
+      });
     }
   };
 
@@ -378,6 +737,47 @@ export default function RestaurantDashboard() {
     }
   };
 
+  const normalizedStaffSearch = staffSearch.trim().toLowerCase();
+  const filteredUsers = normalizedStaffSearch
+    ? users.filter((user) =>
+        [user.username, user.email, user.role]
+          .filter(Boolean)
+          .some((value) =>
+            String(value).toLowerCase().includes(normalizedStaffSearch),
+          ),
+      )
+    : users;
+
+  const menuCategories = [
+    "all",
+    ...Array.from(
+      new Set(
+        menus
+          .map((item) => item.category)
+          .filter(Boolean)
+          .map((category) => String(category)),
+      ),
+    ).sort((a, b) => a.localeCompare(b)),
+  ];
+  const normalizedMenuSearch = menuSearch.trim().toLowerCase();
+  const filteredMenus = menus.filter((item) => {
+    const matchesSearch =
+      !normalizedMenuSearch ||
+      [item.name, item.category, item.description]
+        .filter(Boolean)
+        .some((value) =>
+          String(value).toLowerCase().includes(normalizedMenuSearch),
+        );
+    const matchesCategory =
+      menuCategory === "all" || String(item.category) === menuCategory;
+    const matchesStatus =
+      menuStatus === "all" ||
+      (menuStatus === "active" && item.isAvailable !== false) ||
+      (menuStatus === "hidden" && item.isAvailable === false);
+
+    return matchesSearch && matchesCategory && matchesStatus;
+  });
+
   return (
     <div className="bg-background text-on-surface min-h-screen font-sans">
       {/* SideNavBar */}
@@ -385,32 +785,60 @@ export default function RestaurantDashboard() {
         <div className="mb-8 px-2">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-primary-container flex items-center justify-center overflow-hidden font-bold text-on-primary text-xl">
-              {auth?.restaurantSlug?.charAt(0).toUpperCase() || "R"}
+              {restaurantProfile.logoDataUrl ? (
+                <>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={restaurantProfile.logoDataUrl}
+                    alt="Restaurant logo"
+                    className="h-full w-full object-cover"
+                  />
+                </>
+              ) : (
+                auth?.restaurantSlug?.charAt(0).toUpperCase() || "R"
+              )}
             </div>
             <div>
               <h1 className="text-lg font-black text-indigo-900 dark:text-white leading-tight">
-                RestoAdmin
+                {restaurantProfile.name || auth?.restaurantName || "RestoAdmin"}
               </h1>
               <p className="text-[10px] uppercase tracking-widest font-bold text-slate-400">
-                Management Suite
+                {restaurantProfile.slug || auth?.restaurantSlug || "Management Suite"}
               </p>
             </div>
           </div>
         </div>
 
         <nav className="flex-1 space-y-1">
-          <Link
-            href={buildRestaurantPath(auth, "admin")}
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-slate-100 dark:bg-indigo-900/20 text-indigo-900 dark:text-indigo-300 border-r-4 border-indigo-900 dark:border-indigo-400 font-semibold transition-all"
+          <button
+            onClick={() => setActiveTab("staff")}
+            className={`flex items-center w-full gap-3 px-3 py-2.5 rounded-lg font-semibold transition-all ${
+              activeTab === "staff"
+                ? "bg-slate-100 dark:bg-indigo-900/20 text-indigo-900 dark:text-indigo-300 border-r-4 border-indigo-900 dark:border-indigo-400"
+                : "text-slate-600 dark:text-slate-400 hover:text-indigo-800 dark:hover:text-indigo-200 hover:bg-slate-50 dark:hover:bg-slate-900"
+            }`}
           >
             <span className="material-symbols-outlined">badge</span>
             <span className="font-sans text-sm">Staff Management</span>
-          </Link>
+          </button>
+          
+          <button
+            onClick={() => setActiveTab("menu")}
+            className={`flex items-center w-full gap-3 px-3 py-2.5 rounded-lg font-semibold transition-all ${
+              activeTab === "menu"
+                ? "bg-slate-100 dark:bg-indigo-900/20 text-indigo-900 dark:text-indigo-300 border-r-4 border-indigo-900 dark:border-indigo-400"
+                : "text-slate-600 dark:text-slate-400 hover:text-indigo-800 dark:hover:text-indigo-200 hover:bg-slate-50 dark:hover:bg-slate-900"
+            }`}
+          >
+            <span className="material-symbols-outlined" style={{ fontVariationSettings: "'FILL' 1" }}>restaurant_menu</span>
+            <span className="font-sans text-sm">Menu Management</span>
+          </button>
+          
           <Link
             href={buildRestaurantPath(auth, "orders")}
             className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-600 dark:text-slate-400 hover:text-indigo-800 dark:hover:text-indigo-200 hover:bg-slate-50 dark:hover:bg-slate-900 transition-all"
           >
-            <span className="material-symbols-outlined">restaurant_menu</span>
+            <span className="material-symbols-outlined">receipt_long</span>
             <span className="font-sans text-sm">Live Orders</span>
           </Link>
           <Link
@@ -428,7 +856,7 @@ export default function RestaurantDashboard() {
             <span className="font-sans text-sm">Kitchen</span>
           </Link>
           <Link
-            href={buildRestaurantPath(auth, "profile")}
+            href={buildRestaurantPath(auth, "settings")}
             className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-600 dark:text-slate-400 hover:text-indigo-800 dark:hover:text-indigo-200 hover:bg-slate-50 dark:hover:bg-slate-900 transition-all"
           >
             <span className="material-symbols-outlined">settings</span>
@@ -506,8 +934,10 @@ export default function RestaurantDashboard() {
 
       {/* Main Content Area */}
       <main className="pt-24 px-4 md:px-margin pb-xl min-h-screen md:ml-64">
-        {/* Header Section */}
-        <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-4 md:gap-gutter mb-lg">
+        {activeTab === "staff" && (
+          <>
+            {/* Header Section */}
+            <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-4 md:gap-gutter mb-lg">
           <div>
             <h2 className="font-h1 text-h1 text-primary tracking-tight">
               Staff Management
@@ -525,6 +955,8 @@ export default function RestaurantDashboard() {
                 className="w-full sm:w-64 bg-surface-container-lowest border-outline-variant rounded-lg py-base pl-10 pr-md text-body-sm focus:border-primary focus:ring-0 transition-all"
                 placeholder="Search employees..."
                 type="text"
+                value={staffSearch}
+                onChange={(event) => setStaffSearch(event.target.value)}
               />
             </div>
             <button
@@ -650,57 +1082,120 @@ export default function RestaurantDashboard() {
           </section>
         )}
 
+        <div className="mb-lg flex flex-col gap-3 rounded-lg border border-slate-100 bg-white px-md py-base shadow-sm md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-label-md font-bold uppercase tracking-wider text-slate-500">
+              Sales Analytics
+            </p>
+            <p className="mt-1 text-body-sm text-secondary">
+              Based on paid completed orders. Last updated{" "}
+              {formatDateTime(analyticsUpdatedAt)}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {[7, 30, 90].map((days) => (
+              <button
+                key={days}
+                type="button"
+                onClick={() => setAnalyticsDays(days)}
+                className={`h-9 rounded-md px-3 text-sm font-semibold transition ${
+                  analyticsDays === days
+                    ? "bg-primary text-on-primary"
+                    : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                {days}D
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={loadAnalytics}
+              disabled={analyticsLoading}
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+            >
+              <span
+                className={`material-symbols-outlined text-[18px] ${
+                  analyticsLoading ? "animate-spin" : ""
+                }`}
+              >
+                refresh
+              </span>
+              Refresh
+            </button>
+          </div>
+        </div>
+
         {/* Analytics Bento Overview */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-gutter mb-lg">
+        <div className="grid grid-cols-1 gap-gutter mb-lg md:grid-cols-2 xl:grid-cols-4">
           <div className="bg-surface-container-lowest border border-slate-100 p-md rounded-xl shadow-sm hover:shadow-md transition-shadow">
             <div className="flex items-center justify-between mb-base">
-              <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg">
-                <span className="material-symbols-outlined">group</span>
+              <div className="p-2 bg-emerald-50 text-emerald-600 rounded-lg">
+                <span className="material-symbols-outlined">payments</span>
               </div>
-              <span className="text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full text-label-sm font-bold">
-                +2 New
+              <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full text-label-sm font-bold">
+                Real sales
               </span>
             </div>
             <p className="text-label-md text-secondary uppercase tracking-wider">
-              Total Staff
+              Total Revenue
             </p>
-            <p className="text-h1 font-display text-primary mt-xs">
-              {userCount}
+            <p className="text-h2 font-display text-primary mt-xs">
+              {analyticsLoading ? "Loading..." : formatTHB(analytics.summary.totalRevenue)}
             </p>
           </div>
           <div className="bg-surface-container-lowest border border-slate-100 p-md rounded-xl shadow-sm hover:shadow-md transition-shadow">
             <div className="flex items-center justify-between mb-base">
-              <div className="p-2 bg-emerald-50 text-emerald-600 rounded-lg">
-                <span className="material-symbols-outlined">bolt</span>
+              <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg">
+                <span className="material-symbols-outlined">receipt_long</span>
               </div>
               <span className="text-slate-400 text-label-sm">
-                Current Roster
+                Completed
               </span>
             </div>
             <p className="text-label-md text-secondary uppercase tracking-wider">
-              Active Today
+              Orders Closed
             </p>
             <p className="text-h1 font-display text-primary mt-xs">
-              {Math.round(userCount * 0.75)}
+              {analyticsLoading ? "..." : analytics.summary.orderCount}
+            </p>
+          </div>
+          <div className="bg-surface-container-lowest border border-slate-100 p-md rounded-xl shadow-sm hover:shadow-md transition-shadow">
+            <div className="flex items-center justify-between mb-base">
+              <div className="p-2 bg-sky-50 text-sky-600 rounded-lg">
+                <span className="material-symbols-outlined">stacked_line_chart</span>
+              </div>
+              <span className="text-slate-400 text-label-sm">
+                Per bill
+              </span>
+            </div>
+            <p className="text-label-md text-secondary uppercase tracking-wider">
+              Avg Order Value
+            </p>
+            <p className="text-h2 font-display text-primary mt-xs">
+              {analyticsLoading ? "Loading..." : formatTHB(analytics.summary.avgOrderValue)}
             </p>
           </div>
           <div className="bg-surface-container-lowest border border-slate-100 p-md rounded-xl shadow-sm hover:shadow-md transition-shadow">
             <div className="flex items-center justify-between mb-base">
               <div className="p-2 bg-amber-50 text-amber-600 rounded-lg">
-                <span className="material-symbols-outlined">
-                  pending_actions
-                </span>
+                <span className="material-symbols-outlined">table_restaurant</span>
               </div>
-              <span className="text-error font-bold text-label-sm">Urgent</span>
+              <span className="text-amber-700 font-bold text-label-sm">Live floor</span>
             </div>
             <p className="text-label-md text-secondary uppercase tracking-wider">
-              Open Shifts
+              Open Tables
             </p>
             <p className="text-h1 font-display text-primary mt-xs">
-              {reservedTables}
+              {analyticsLoading ? "..." : reservedTables}
             </p>
           </div>
         </div>
+
+        {analyticsError ? (
+          <div className="mb-lg rounded-xl border border-rose-200 bg-rose-50 px-md py-base text-sm text-rose-700">
+            {analyticsError}
+          </div>
+        ) : null}
 
         {/* User Management Table */}
         <div className="bg-surface-container-lowest border border-slate-100 rounded-xl shadow-sm overflow-hidden">
@@ -753,7 +1248,7 @@ export default function RestaurantDashboard() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {users.map((user, idx) => (
+                {filteredUsers.map((user, idx) => (
                   <tr
                     key={user.username}
                     className="hover:bg-surface-container-low/20 transition-colors group"
@@ -786,24 +1281,24 @@ export default function RestaurantDashboard() {
                       <div className="flex items-center gap-2">
                         <div
                           className={`w-2 h-2 rounded-full ${
-                            idx === 0
+                            user.online_status === "active"
                               ? "bg-emerald-500 animate-pulse"
                               : "bg-slate-400"
                           }`}
                         ></div>
                         <span
                           className={`font-medium text-body-sm px-2 py-0.5 rounded ${
-                            idx === 0
+                            user.online_status === "active"
                               ? "text-emerald-700 bg-emerald-50"
                               : "text-slate-600 bg-slate-50"
                           }`}
                         >
-                          {idx === 0 ? "Active" : "Offline"}
+                          {user.online_status === "active" ? "Active" : "Offline"}
                         </span>
                       </div>
                     </td>
                     <td className="px-md py-md font-body-sm text-secondary">
-                      {idx === 0 ? "Now" : "2h ago"}
+                      {formatLastActive(user)}
                     </td>
                     <td className="px-md py-md text-right">
                       <div className="flex items-center justify-end gap-xs opacity-0 group-hover:opacity-100 transition-opacity">
@@ -827,7 +1322,7 @@ export default function RestaurantDashboard() {
                     </td>
                   </tr>
                 ))}
-                {users.length === 0 && !usersLoading && (
+                {filteredUsers.length === 0 && !usersLoading && (
                   <tr>
                     <td
                       colSpan="5"
@@ -842,7 +1337,7 @@ export default function RestaurantDashboard() {
           </div>
           <div className="px-md py-base border-t border-slate-100 bg-surface-container-low/10 flex items-center justify-between">
             <p className="text-label-sm text-outline">
-              Showing {users.length} of {userCount} members
+              Showing {filteredUsers.length} of {userCount} members
             </p>
             <div className="flex items-center gap-base">
               <button
@@ -862,56 +1357,200 @@ export default function RestaurantDashboard() {
           </div>
         </div>
 
-        {/* Productivity Insights Card */}
+        {/* Sales Analytics */}
         <div className="mt-lg grid grid-cols-1 md:grid-cols-12 gap-gutter">
-          <div className="md:col-span-8 bg-primary-container text-on-primary-container p-lg rounded-xl flex items-center justify-between overflow-hidden relative group">
-            <div className="z-10 relative">
-              <h3 className="font-h2 text-h2 mb-base">
-                Weekly Roster Complete
-              </h3>
-              <p className="text-body-md opacity-80 max-w-md mb-md">
-                All staff shifts have been assigned for the upcoming week.
-                Review and publish to notify the team.
-              </p>
-              <button className="bg-tertiary-fixed text-on-tertiary-fixed px-md py-base rounded-lg font-label-md active:scale-95 transition-all">
-                Publish Roster
-              </button>
-            </div>
-            <div className="absolute right-0 top-0 h-full w-1/3 opacity-20 group-hover:opacity-30 transition-opacity">
-              <img
-                className="object-cover w-full h-full grayscale"
-                alt="Abstract background"
-                src="https://lh3.googleusercontent.com/aida-public/AB6AXuDdlSfmhY_-ndsdxW6GysEmfb0PF-tmZIRjEdjB5eSSbTwmpHqhUkqYvCBpIwC8xXfk7pBWKk_YrUOvCsulEwSMPSRYaj4eUVWlMN4weHDJj6qKA_tIjBGnUbaM-NnpXjfDamqw1XwvkfpvmxiVmXK6B_1pgsh0jy66a9VLyUKd5QbC9swczelkylFCC-t-CwXzuE0I2R0yYSpJM88a0y4kRYLA5gIUbnRAu-ONtYEy__9JYDGT0Lv4BlegRn-e28IYrJ10EoYkjA_8"
-              />
-            </div>
+          <div className="md:col-span-8">
+            <SalesTrendChart data={analytics.salesSeries} />
           </div>
-          <div className="md:col-span-4 bg-white border border-slate-100 p-md rounded-xl flex flex-col justify-center">
+          <div className="md:col-span-4 bg-white border border-slate-100 p-md rounded-xl flex flex-col">
             <div className="flex items-center gap-base mb-sm">
               <span
                 className="material-symbols-outlined text-amber-500"
                 style={{ fontVariationSettings: "'FILL' 1" }}
               >
-                star
+                local_fire_department
               </span>
               <p className="font-label-md text-primary uppercase">
-                Top Performer
+                Top Items
               </p>
             </div>
-            <div className="flex items-center gap-md">
-              <div className="w-14 h-14 rounded-full border-2 border-amber-100 bg-primary-fixed flex justify-center items-center text-primary-container font-h2 font-bold">
-                {users[0]?.username?.charAt(0).toUpperCase() || "T"}
-              </div>
-              <div>
-                <p className="font-h3 text-h3 text-primary">
-                  {users[0]?.username || "System Admin"}
-                </p>
-                <p className="text-body-sm text-secondary">
-                  98% Service Efficiency
-                </p>
-              </div>
+            <div className="space-y-3">
+              {analytics.topItems.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500">
+                  No completed sales yet.
+                </div>
+              ) : (
+                analytics.topItems.map((item, index) => (
+                  <div
+                    key={`${item.name}-${index}`}
+                    className="rounded-lg bg-slate-50 px-4 py-3 ring-1 ring-slate-100"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold text-slate-900">
+                          {item.name}
+                        </p>
+                        <p className="text-xs text-slate-500">
+                          {item.quantity} items sold
+                        </p>
+                      </div>
+                      <p className="text-sm font-semibold text-slate-900">
+                        {formatTHB(item.revenue)}
+                      </p>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="mt-4 rounded-lg bg-indigo-50 px-4 py-3 text-sm text-indigo-900">
+              Best order value: {formatTHB(analytics.summary.bestOrderValue)}
             </div>
           </div>
         </div>
+          </>
+        )}
+
+        {activeTab === "menu" && (
+          <div className="flex flex-col h-full animate-in fade-in duration-300">
+            {/* Page Header */}
+            <div className="flex flex-col md:flex-row md:justify-between md:items-center mb-margin gap-4">
+              <div>
+                <h1 className="font-h1 text-h1 text-on-background">Menu Management</h1>
+                <p className="font-body-md text-body-md text-on-surface-variant mt-1">Manage your restaurant menu items and availability.</p>
+              </div>
+              <button 
+                onClick={() => setShowMenu(true)}
+                className="bg-primary hover:bg-primary-container text-on-primary font-label-md text-label-md px-6 py-3 rounded-lg flex items-center justify-center gap-2 transition-colors shadow-sm active:scale-95 w-full md:w-auto"
+              >
+                <span className="material-symbols-outlined text-[18px]">add</span>
+                Add New Item
+              </button>
+            </div>
+
+            {/* Filters & Controls */}
+            <div className="bg-surface-container-lowest border border-outline-variant rounded-xl p-md mb-gutter shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                {/* Category Tabs */}
+                <div className="flex gap-2 border-b border-outline-variant pb-1 flex-1 min-w-[200px] overflow-x-auto hide-scrollbar">
+                  {menuCategories.map((category) => (
+                    <button
+                      key={category}
+                      type="button"
+                      onClick={() => setMenuCategory(category)}
+                      className={`font-label-md text-label-md px-4 py-2 border-b-2 whitespace-nowrap transition-colors ${
+                        menuCategory === category
+                          ? "border-primary text-primary"
+                          : "border-transparent text-on-surface-variant hover:text-on-background"
+                      }`}
+                    >
+                      {category === "all" ? "All" : category}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Search and Status Filter */}
+                <div className="flex gap-4 items-center w-full md:w-auto">
+                  <div className="relative flex-1 md:w-64">
+                    <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-sm">search</span>
+                    <input
+                      className="pl-9 pr-4 py-2 border border-outline-variant rounded-md font-body-sm text-body-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none bg-surface-container-lowest w-full text-on-background"
+                      placeholder="Search menu..."
+                      type="text"
+                      value={menuSearch}
+                      onChange={(event) => setMenuSearch(event.target.value)}
+                    />
+                  </div>
+                  <select
+                    value={menuStatus}
+                    onChange={(event) => setMenuStatus(event.target.value)}
+                    className="border border-outline-variant rounded-md px-3 py-2 font-body-sm text-body-sm bg-surface-container-lowest text-on-background focus:border-primary focus:ring-1 focus:ring-primary outline-none appearance-none pr-8 relative shrink-0"
+                  >
+                    <option value="all">All Status</option>
+                    <option value="active">Active</option>
+                    <option value="hidden">Hidden</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* Menu Grid */}
+            {menusLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <span className="material-symbols-outlined animate-spin text-primary text-4xl">refresh</span>
+              </div>
+            ) : filteredMenus.length === 0 ? (
+              <div className="text-center py-12 text-secondary bg-surface-container-lowest border border-dashed border-outline-variant rounded-xl">
+                <span className="material-symbols-outlined text-4xl mb-4 opacity-50">restaurant_menu</span>
+                <p>No menu items found. Use Add New Item to create one.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-gutter pb-8">
+                {filteredMenus.map((item) => (
+                  <div key={item.id} className={`bg-surface-container-lowest border border-outline-variant rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all group flex flex-col ${item.isAvailable === false ? 'opacity-75' : ''}`}>
+                    <div className="h-48 bg-surface-variant relative overflow-hidden shrink-0">
+                      {item.image || menuPlaceholderImage ? (
+                        <>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img alt={item.name} className={`w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 ${item.isAvailable === false ? 'grayscale-[50%]' : ''}`} src={item.image || menuPlaceholderImage} />
+                        </>
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center bg-slate-100 text-slate-400 group-hover:scale-105 transition-transform duration-300">
+                          <span className="material-symbols-outlined text-4xl">image</span>
+                        </div>
+                      )}
+                      {item.category && (
+                        <div className="absolute top-3 right-3 bg-surface-container-lowest/90 backdrop-blur-sm px-2 py-1 rounded font-label-sm text-label-sm text-on-background border border-outline-variant/50 capitalize shadow-sm">
+                          {item.category}
+                        </div>
+                      )}
+                      {item.isAvailable === false && (
+                        <div className="absolute inset-0 bg-surface/20"></div>
+                      )}
+                    </div>
+                    <div className="p-sm flex flex-col gap-3 flex-1">
+                      <div className="flex justify-between items-start gap-2">
+                        <h3 className={`font-h3 text-h3 leading-tight line-clamp-2 ${item.isAvailable === false ? 'text-outline' : 'text-on-background'}`}>{item.name}</h3>
+                        <span className={`font-h3 text-h3 shrink-0 ${item.isAvailable === false ? 'text-outline' : 'text-primary'}`}>฿{item.price}</span>
+                      </div>
+                      {item.description && (
+                        <p className="text-body-sm text-on-surface-variant line-clamp-2 mt-1">{item.description}</p>
+                      )}
+                      <div className="flex items-center justify-between mt-auto pt-2 border-t border-surface-variant">
+                        <button
+                          type="button"
+                          onClick={() => toggleMenuAvailability(item)}
+                          className={`inline-flex items-center gap-1 font-label-sm text-label-sm px-2 py-1 rounded-full transition hover:scale-105 ${item.isAvailable !== false ? 'text-primary bg-primary-fixed' : 'text-outline bg-surface-variant'}`}
+                          title={item.isAvailable !== false ? "Hide menu item" : "Show menu item"}
+                        >
+                          <span className={`w-2 h-2 rounded-full ${item.isAvailable !== false ? 'bg-primary' : 'bg-outline'}`}></span>
+                          {item.isAvailable !== false ? 'Active' : 'Hidden'}
+                        </button>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => startEditMenu(item)}
+                            className="p-1.5 text-on-surface-variant hover:text-primary hover:bg-surface-container rounded transition-colors"
+                            title="Edit"
+                          >
+                            <span className="material-symbols-outlined text-[20px]">edit</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteMenu(item)}
+                            className="p-1.5 text-on-surface-variant hover:text-error hover:bg-error-container rounded transition-colors"
+                            title="Delete"
+                          >
+                            <span className="material-symbols-outlined text-[20px]">delete</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </main>
 
       {showUserModal && typeof document !== "undefined"
@@ -1073,7 +1712,9 @@ export default function RestaurantDashboard() {
         handleSubmit={handleMenuSubmit}
         handleImageChange={handleImageChange}
         imagePreview={imagePreview}
+        imageInputRef={menuImageInputRef}
         submitLoading={submitLoading}
+        mode={editingMenu ? "edit" : "create"}
       />
     </div>
   );

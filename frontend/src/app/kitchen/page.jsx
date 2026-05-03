@@ -13,6 +13,7 @@ export default function KitchenDashboard() {
   const pingRef = useRef(null);
   const retryRef = useRef(null);
   const [connected, setConnected] = useState(false);
+  const [activeSince, setActiveSince] = useState(null);
   const [queue, setQueue] = useState([]);
   const [error, setError] = useState("");
 
@@ -26,6 +27,7 @@ export default function KitchenDashboard() {
 
     socket.onopen = () => {
       setConnected(true);
+      setActiveSince(new Date());
       setError("");
       pingRef.current = setInterval(() => {
         if (socket.readyState === WebSocket.OPEN) {
@@ -63,6 +65,7 @@ export default function KitchenDashboard() {
     socket.onerror = () => setError("เชื่อมต่อครัวไม่สำเร็จ");
     socket.onclose = () => {
       setConnected(false);
+      setActiveSince(null);
       if (pingRef.current) clearInterval(pingRef.current);
       retryRef.current = setTimeout(connect, 3000);
     };
@@ -113,6 +116,7 @@ export default function KitchenDashboard() {
 
   const pendingCount = queue.filter(o => o.status === "pending").length;
   const cookingCount = queue.filter(o => o.status === "preparing").length;
+  const activeLabel = connected ? "Active" : "Offline";
 
   if (!ready || (auth?.token && !allowed)) {
     return (
@@ -129,6 +133,20 @@ export default function KitchenDashboard() {
         <div className="px-6 mb-8">
           <h1 className="text-lg font-black text-primary-container">{title}</h1>
           <p className="font-body-sm text-secondary">Kitchen Terminal</p>
+          <div
+            className={`mt-3 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-bold ${
+              connected
+                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                : "border-rose-200 bg-rose-50 text-rose-700"
+            }`}
+          >
+            <span
+              className={`h-2 w-2 rounded-full ${
+                connected ? "bg-emerald-500 animate-pulse" : "bg-rose-500"
+              }`}
+            />
+            Kitchen {activeLabel}
+          </div>
         </div>
         <ul className="flex-1 space-y-2 px-2 overflow-y-auto">
           <li>
@@ -168,7 +186,7 @@ export default function KitchenDashboard() {
                     : "bg-error-container text-on-error-container border-error"
                 }`}>
                 {connected && <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1 animate-pulse"></span>}
-                {connected ? "Live Connection" : "Disconnected"}
+                {connected ? "Active" : "Disconnected"}
               </span>
             </div>
           </div>
@@ -191,6 +209,15 @@ export default function KitchenDashboard() {
             <div>
               <h2 className="font-h1 text-on-surface mb-1">Kitchen Display System</h2>
               <p className="font-body-sm text-secondary">Real-time order fulfillment queue.</p>
+              <p className="mt-2 font-label-sm text-secondary">
+                Status:{" "}
+                <span className={connected ? "text-emerald-700" : "text-error"}>
+                  {connected ? "Active" : "Offline"}
+                </span>
+                {activeSince
+                  ? ` since ${activeSince.toLocaleTimeString("th-TH")}`
+                  : ""}
+              </p>
             </div>
             <div className="flex gap-2">
               <button className="px-4 py-2 rounded-lg bg-surface border border-outline-variant text-on-surface font-label-md hover:bg-surface-container transition-colors flex items-center gap-2">
@@ -215,8 +242,8 @@ export default function KitchenDashboard() {
               <span className="font-display text-emerald-700">0</span>
             </div>
             <div className="bg-surface rounded-xl p-md border border-outline-variant shadow-[0_4px_12px_rgba(45,62,97,0.04)] flex flex-col">
-              <span className="font-label-sm text-secondary uppercase tracking-wider mb-2">Avg Prep Time</span>
-              <span className="font-display text-on-surface">-</span>
+              <span className="font-label-sm text-secondary uppercase tracking-wider mb-2">Kitchen Status</span>
+              <span className={`font-display ${connected ? "text-emerald-700" : "text-error"}`}>{activeLabel}</span>
             </div>
           </div>
 

@@ -34,6 +34,21 @@ export default function RestaurantBillingPage() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
+  const [requests, setRequests] = useState([]);
+  const [requestForm, setRequestForm] = useState({
+    months: 1,
+    amount: "",
+    note: "",
+    proof: null,
+  });
+
+  const readFileAsDataUrl = (file) =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
 
   useEffect(() => {
     if (!ready) return;
@@ -53,6 +68,8 @@ export default function RestaurantBillingPage() {
       try {
         const response = await api.get("/restaurant/subscription");
         setPayload(response.data);
+        const requestsResponse = await api.get("/restaurant/billing/requests");
+        setRequests(requestsResponse.data.requests || []);
       } catch (error) {
         setMessage(
           error.normalizedMessage || "Unable to load subscription details.",
@@ -80,6 +97,34 @@ export default function RestaurantBillingPage() {
       setMessage("Renewal request submitted. Please review it from superadmin.");
     } catch (error) {
       setMessage(error.normalizedMessage || "Unable to request renewal.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const submitBillingRequest = async () => {
+    setSubmitting(true);
+    setMessage("");
+    try {
+      const proofBase64 = requestForm.proof
+        ? await readFileAsDataUrl(requestForm.proof)
+        : null;
+
+      const response = await api.post("/restaurant/billing/requests", {
+        plan_code: subscription?.plan_code || auth?.subscriptionPlan || "starter",
+        months: Number(requestForm.months || 1),
+        amount: requestForm.amount ? Number(requestForm.amount) : undefined,
+        note: requestForm.note || "Submitted from billing page",
+        proof_base64: proofBase64,
+        proof_mime: requestForm.proof?.type || undefined,
+        proof_filename: requestForm.proof?.name || undefined,
+      });
+
+      setRequests((current) => [response.data.request, ...current]);
+      setRequestForm({ months: 1, amount: "", note: "", proof: null });
+      setMessage("Billing request submitted for superadmin review.");
+    } catch (error) {
+      setMessage(error.normalizedMessage || "Unable to submit billing request.");
     } finally {
       setSubmitting(false);
     }
@@ -193,14 +238,86 @@ export default function RestaurantBillingPage() {
 
             <div className="mt-6 grid gap-3">
               {canRequestRenewal ? (
-                <button
-                  type="button"
-                  onClick={requestRenewal}
-                  disabled={submitting}
-                  className="inline-flex h-12 items-center justify-center rounded-2xl bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60"
-                >
-                  {submitting ? "Submitting..." : "Request renewal"}
-                </button>
+                <div className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="text-sm font-semibold text-slate-700">
+                      Months
+                      <input
+                        type="number"
+                        min="1"
+                        max="24"
+                        value={requestForm.months}
+                        onChange={(event) =>
+                          setRequestForm((current) => ({
+                            ...current,
+                            months: event.target.value,
+                          }))
+                        }
+                        className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
+                      />
+                    </label>
+                    <label className="text-sm font-semibold text-slate-700">
+                      Amount
+                      <input
+                        type="number"
+                        min="0"
+                        value={requestForm.amount}
+                        onChange={(event) =>
+                          setRequestForm((current) => ({
+                            ...current,
+                            amount: event.target.value,
+                          }))
+                        }
+                        className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
+                        placeholder="Optional"
+                      />
+                    </label>
+                  </div>
+                  <label className="text-sm font-semibold text-slate-700">
+                    Payment proof
+                    <input
+                      type="file"
+                      accept="image/*,.pdf"
+                      onChange={(event) =>
+                        setRequestForm((current) => ({
+                          ...current,
+                          proof: event.target.files?.[0] || null,
+                        }))
+                      }
+                      className="mt-2 block w-full text-sm text-slate-600 file:mr-3 file:rounded-xl file:border-0 file:bg-slate-950 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-white"
+                    />
+                  </label>
+                  <label className="text-sm font-semibold text-slate-700">
+                    Note
+                    <textarea
+                      value={requestForm.note}
+                      onChange={(event) =>
+                        setRequestForm((current) => ({
+                          ...current,
+                          note: event.target.value,
+                        }))
+                      }
+                      className="mt-2 min-h-20 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                      placeholder="Transfer reference or renewal note"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={submitBillingRequest}
+                    disabled={submitting}
+                    className="inline-flex h-12 items-center justify-center rounded-2xl bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60"
+                  >
+                    {submitting ? "Submitting..." : "Submit proof for review"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={requestRenewal}
+                    disabled={submitting}
+                    className="inline-flex h-12 items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                  >
+                    Request renewal without proof
+                  </button>
+                </div>
               ) : null}
               <button
                 type="button"
@@ -232,6 +349,39 @@ export default function RestaurantBillingPage() {
               <li>Operational tools like opening tables and placing orders are locked.</li>
               <li>Superadmin can reactivate access manually without a payment gateway.</li>
             </ul>
+          </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+            <h2 className="text-xl font-semibold">Billing requests</h2>
+            <div className="mt-4 grid gap-3">
+              {requests.length > 0 ? (
+                requests.map((request) => (
+                  <div
+                    key={request.id}
+                    className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="font-semibold text-slate-900">
+                        {String(request.status || "").replace(/_/g, " ").toUpperCase()}
+                      </span>
+                      <span className="text-slate-500">
+                        {request.months || 1} month
+                      </span>
+                    </div>
+                    <p className="mt-2 text-slate-600">
+                      {request.note || "No note"}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-400">
+                      {formatDate(request.created_at)}
+                    </p>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-slate-500">
+                  No billing requests submitted yet.
+                </p>
+              )}
+            </div>
           </div>
         </aside>
       </section>

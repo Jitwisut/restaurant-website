@@ -37,7 +37,10 @@ export default function MenuUploadModal({
     imagePreview,
     submitLoading = false,
     modalRef,
+    imageInputRef,
+    categoryOptions = [],
     LoadingSpinner,
+    mode = "create",
 }) {
     if (!isOpen) return null;
 
@@ -194,6 +197,7 @@ export default function MenuUploadModal({
                         </label>
                         <div className="border-2 border-dashed border-slate-300 rounded-xl p-8 hover:border-emerald-400 transition-colors duration-200 text-center">
                             <input
+                                ref={imageInputRef}
                                 type="file"
                                 accept="image/*"
                                 onChange={handleImageChange}
@@ -250,7 +254,7 @@ export default function MenuUploadModal({
                             ) : (
                                 <Upload className="w-4 h-4" />
                             )}
-                            อัพโหลดเมนู
+                            {mode === "edit" ? "Save menu changes" : "อัพโหลดเมนู"}
                         </button>
                         <button
                             type="button"

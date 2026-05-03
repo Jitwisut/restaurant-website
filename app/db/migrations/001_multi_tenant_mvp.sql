@@ -26,6 +26,16 @@ ALTER TABLE tables ADD COLUMN IF NOT EXISTS restaurant_id INTEGER REFERENCES res
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS restaurant_id INTEGER REFERENCES restaurants(id);
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS restaurant_id INTEGER REFERENCES restaurants(id);
 ALTER TABLE order_items ADD COLUMN IF NOT EXISTS restaurant_id INTEGER REFERENCES restaurants(id);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS subtotal NUMERIC(12, 2) NOT NULL DEFAULT 0;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(12, 2) NOT NULL DEFAULT 0;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS service_charge_amount NUMERIC(12, 2) NOT NULL DEFAULT 0;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS tax_amount NUMERIC(12, 2) NOT NULL DEFAULT 0;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS grand_total NUMERIC(12, 2) NOT NULL DEFAULT 0;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_status VARCHAR(30) NOT NULL DEFAULT 'unpaid';
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMP;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS voided_at TIMESTAMP;
 
 DO $$
 BEGIN
@@ -139,9 +149,46 @@ CREATE UNIQUE INDEX IF NOT EXISTS users_global_superadmin_username_key
   WHERE role = 'superadmin';
 CREATE INDEX IF NOT EXISTS idx_menu_restaurant ON menu_new(restaurant_id);
 CREATE INDEX IF NOT EXISTS idx_tables_restaurant ON tables(restaurant_id);
+CREATE INDEX IF NOT EXISTS idx_tables_restaurant_status ON tables(restaurant_id, status);
 CREATE INDEX IF NOT EXISTS idx_sessions_restaurant ON sessions(restaurant_id);
 CREATE INDEX IF NOT EXISTS idx_orders_restaurant ON orders(restaurant_id);
 CREATE INDEX IF NOT EXISTS idx_orders_restaurant_time ON orders(restaurant_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_orders_sales_paid ON orders(restaurant_id, payment_status, paid_at);
+CREATE INDEX IF NOT EXISTS idx_orders_sales_status_created ON orders(restaurant_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_order_items_restaurant ON order_items(restaurant_id);
+CREATE INDEX IF NOT EXISTS idx_order_items_order_restaurant ON order_items(order_id, restaurant_id);
+
+WITH totals AS (
+  SELECT
+    o.id,
+    o.restaurant_id,
+    COALESCE(SUM(oi.quantity * oi.price::numeric), 0) AS subtotal
+  FROM orders o
+  LEFT JOIN order_items oi
+    ON oi.order_id = o.id
+   AND oi.restaurant_id = o.restaurant_id
+  GROUP BY o.id, o.restaurant_id
+)
+UPDATE orders o
+   SET subtotal = totals.subtotal,
+       grand_total = totals.subtotal,
+       payment_status = CASE
+         WHEN o.status = 'completed' AND o.payment_status = 'unpaid'
+           THEN 'paid'
+         ELSE o.payment_status
+       END,
+       paid_at = CASE
+         WHEN o.status = 'completed' AND o.paid_at IS NULL
+           THEN COALESCE(o.completed_at, o.created_at)
+         ELSE o.paid_at
+       END,
+       completed_at = CASE
+         WHEN o.status = 'completed' AND o.completed_at IS NULL
+           THEN COALESCE(o.paid_at, o.created_at)
+         ELSE o.completed_at
+       END
+  FROM totals
+ WHERE o.id = totals.id
+   AND o.restaurant_id = totals.restaurant_id;
 
 COMMIT;

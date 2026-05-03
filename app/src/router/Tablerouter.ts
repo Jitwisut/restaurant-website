@@ -1,6 +1,7 @@
 import { Elysia, t } from "elysia";
 import { Tablecontroller } from "../Controller/Tablescontroller";
 import { rateLimit } from "elysia-rate-limit";
+import { menucontroller } from "../Controller/Menucontroller";
 
 export const Tablerouter = (app: Elysia) => {
   return app.group("/tables", (app) => {
@@ -36,6 +37,7 @@ export const Tablerouter = (app: Elysia) => {
       }*/,
       )
       .get("/checktable/:session", Tablecontroller.checktabel)
+      .get("/session/:session/menu", menucontroller.getSessionMenu)
       .post("/session/:session/guest-token", Tablecontroller.createGuestToken)
 
       .post("/ordersuccess", Tablecontroller.ordersuccess, {

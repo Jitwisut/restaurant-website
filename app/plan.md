@@ -1,29 +1,33 @@
 # Multi-tenant Restaurant SaaS Migration Plan
 
-## Production Readiness Update (2026-05-02)
+## Production Readiness Update (2026-05-04)
 
 **Current backend status:** Not production-ready yet. It is suitable for local development or staging validation, but should not be used as a paid/customer-facing product until the checklist below is completed.
 
-**Latest backend test result:** `bun --env-file=.env.test test` = 80 passed, 5 failed. The remaining failures are around `/menu/get` because tests still expect public menu access, while the backend currently requires JWT.
+**Latest validation result:** `bun --env-file=.env.test test` = 92 passed, 0 failed. `npm run lint` = 0 errors, 18 warnings. `npm run build` = passed.
 
 ### Must Fix Before Production
 
-- Decide and implement the menu access model. If customer menu pages are public, add a slug-based public endpoint such as `/menu/:slug` or `/app/:slug/menu` that resolves `restaurant_id` from restaurant slug. Keep admin/staff menu management protected by JWT.
-- Move all runtime schema changes into migrations. Runtime request paths must not run `CREATE TABLE` or `ALTER TABLE`; `subscriptions` schema setup currently still lives in runtime helpers and should become a migration.
-- Add complete production migrations for `subscriptions`, default table provisioning, tenant indexes, constraints, and rollback notes.
-- Add `.env.example` with `DATABASE_URL`, `JWT_SECRET`, `PORT`, `ORIGIN_URL`, `ORIGIN_URL2`, `DEFAULT_RESTAURANT_ID`, `DEFAULT_TABLE_COUNT`, `RESTAURANT_SIGNUP_ENABLED`, `SUPER_ADMIN_EMAIL`, and `SUPER_ADMIN_PASSWORD`.
-- Remove unsafe database fallback for production. `connect.ts` should fail fast when `DATABASE_URL` is missing outside test/dev instead of falling back to `restaurant_test`.
-- Expand tenant isolation tests for menu, upload, profile, websocket, admin users, tables, orders, guest sessions, and superadmin impersonation.
-- Harden WebSocket auth by requiring a valid token on connect, binding every connection to token-derived `restaurant_id`, and verifying every event stays inside the same tenant.
-- Add production operations basics: health check endpoint, structured logging, request IDs, deployment migration step, bootstrap/seed superadmin script, backup/rollback notes, and tenant-aware rate limiting.
+- Finish real payment provider integration and invoice lifecycle. Manual proof review is available, but production billing still needs provider webhooks, reconciliation, invoice numbers, refunds, and failed-payment handling.
+- Move the remaining runtime schema helpers into migrations. Billing and audit migrations exist, but runtime helpers should eventually stop running `CREATE TABLE` / `ALTER TABLE` on request paths.
+- Add deployment operations: migration command in deploy pipeline, rollback notes, backup/restore drill, structured request logging, request IDs, and monitoring alerts.
+- Expand websocket automated tests. Auth now uses token-derived identity and tenant binding, but socket-level regression coverage is still thin.
+- Add frontend/integration QA across roles and tenants: owner/admin/kitchen/customer/superadmin, expired subscription states, impersonation banner, QR order flow, and billing review flow.
 
 ### Recently Stabilized
 
 - `/tables/gettable` no longer runs schema migration during requests.
 - CORS headers are now applied on error responses, so frontend can see real backend errors instead of misleading browser CORS messages.
-- New restaurants now get default tables automatically.
-- Existing `weedguy` restaurant in the local dev database has been provisioned with 12 available tables.
-- Focused validation passed: `table.test.ts` = 13/13, `restaurant.test.ts` = 6/6.
+- New restaurants no longer get default tables automatically. Floor plans now start empty and restaurant staff add tables explicitly.
+- Legacy sample restaurants with default table sets have been removed from the active local dev database.
+- Superadmin Milestone 1-3 core is now implemented: canonical `/superadmin/*` APIs, restaurant detail, paginated tenant list, audit log, reason-gated impersonation, lifecycle actions, subscription action audit logging, frontend detail/audit pages, and focused backend tests.
+- Public QR customer menu now loads through an active table session endpoint instead of using staff/admin menu access.
+- WebSocket connections now reject invalid JWTs, ignore query-string role authority, bind identity to token payload, and close unauthorized message attempts.
+- Owner-facing billing proof submission and superadmin billing request review/approve/reject are implemented.
+- Added `billing_requests` migration and backend schema/test coverage.
+- Added backend `healthz` and `readyz` endpoints plus backend/frontend `.env.example` files.
+- Analytics date aggregation now uses the same date basis as the `TIMESTAMP` schema, preventing today's sales series from showing 0 while summary totals are correct.
+- Latest validation passed: full backend test suite = 92/92, frontend lint = 0 errors, frontend production build passed.
 
 ---
 
@@ -364,6 +368,77 @@ CREATE INDEX idx_order_items_restaurant  ON order_items(restaurant_id);
 
 ---
 
+### 12.1 Superadmin Operations Hardening ⬅️ เพิ่มใหม่
+**สถานะ:** รอเริ่มงาน
+
+> ส่วน superadmin ตอนนี้ใช้ได้ระดับ MVP สำหรับ approve/suspend/subscription/impersonate แต่ยังไม่พอสำหรับระบบหลังบ้าน production จริง
+
+**สิ่งที่ยังขาดและลำดับที่ควรทำก่อนหลัง**
+
+1. **Restaurant Detail Page — ทำก่อนสุด**
+- สร้างหน้า `/superadmin/restaurants/:id`
+- รวมข้อมูลร้าน, owner/admin account, subscription, จำนวน users/tables/orders/menu, สถานะล่าสุด และ quick actions ไว้ในหน้าเดียว
+- ลดการตัดสินใจจาก list view ที่ข้อมูลยังตื้นเกินไป
+
+2. **Audit Log สำหรับทุก superadmin action**
+- บันทึก action สำคัญ เช่น create restaurant, approve, reject, suspend, renew, change subscription status, impersonate
+- ต้องเก็บ `actor`, `target restaurant`, `action`, `old_value`, `new_value`, `reason`, `created_at`
+- ต้องมีทั้ง backend schema และ UI สำหรับดูย้อนหลัง
+
+3. **Safe Impersonation Flow**
+- บังคับกรอก reason ก่อน impersonate
+- แสดง banner ชัดเจนว่าอยู่ในโหมด impersonation
+- เพิ่มทางกลับ `/superadmin` แบบ one-click
+- จำกัดอายุ token impersonation ให้สั้นกว่าปกติ
+- ทุก impersonation ต้องถูกเขียน audit log
+
+4. **Tenant Lifecycle Management**
+- เพิ่ม flow `archive / restore / soft delete` ให้ชัดเจน
+- แยกจาก `suspend` เพราะความหมายไม่เหมือนกัน
+- ต้องมี retention policy สำหรับ purge จริงภายหลัง
+- หน้า superadmin ต้อง filter ร้านตาม `active / pending / suspended / archived / deleted` ได้
+
+5. **Platform Search / Filter / Pagination จริง**
+- ค้นหาได้ตาม `name`, `slug`, `owner email`, `status`, `plan`, `subscription_status`
+- เพิ่ม pagination ฝั่ง backend แทนการโหลดทั้งหมดทีเดียว
+- เพิ่ม filter สำหรับ `pending only`, `renewal requested`, `suspended`, `trial ending soon`
+
+6. **Platform User Management**
+- เพิ่มมุมมอง user ระดับ platform สำหรับ superadmin
+- ความสามารถขั้นต่ำ: ค้นหา owner/admin ข้ามร้าน, reset access, disable account, transfer ownership
+- ต้องไม่ปนกับ restaurant-local admin tools
+
+7. **Billing Operations ลึกขึ้น**
+- เพิ่ม invoice/payment history
+- เพิ่ม manual credit / note / cancel-at-period-end / downgrade-upgrade flow
+- แยก owner-facing billing view กับ superadmin billing operations ให้ชัด
+
+8. **System Health และ Platform Metrics จริง**
+- หน้า `System Health` ปัจจุบันยังเป็น placeholder
+- เพิ่ม metrics จริง เช่น active tenants, failed renewals, websocket health, background jobs, DB health, request error rate
+- ควรมี endpoint เฉพาะ platform summary สำหรับ superadmin
+
+9. **Moderation Workflow**
+- บังคับใส่ rejection/suspension reason
+- เพิ่ม internal notes ต่อร้าน
+- เพิ่ม review checklist สำหรับร้านที่รอ approve
+- เพิ่ม owner contact trail และ renewal request handling notes
+
+10. **Superadmin Test Coverage**
+- เพิ่ม backend tests สำหรับ impersonation, lifecycle actions, subscription status transitions, audit log writes
+- เพิ่ม frontend/integration tests สำหรับ critical flows ของ superadmin dashboard
+
+**ไฟล์/โมดูลที่คาดว่าจะต้องเพิ่ม**
+- `app/src/Controller/SuperAdminController.ts`
+- `app/src/router/SuperAdminRouter.ts`
+- `app/src/Controller/AuditController.ts`
+- `app/src/router/AuditRouter.ts`
+- `app/db/migrations/00x_add_superadmin_audit_logs.sql`
+- `frontend/src/app/superadmin/restaurants/[id]/page.jsx`
+- `frontend/src/app/superadmin/audit/page.jsx`
+
+---
+
 ## Phase 6: Configuration & Operations
 
 ### 13. เพิ่ม Environment Variables และ Configuration
@@ -451,7 +526,18 @@ Phase 3 + 4 (Existing Features + Tests — ทำควบคู่กัน)
 └── 10. Order System + tests
 
 Phase 5 (Frontend)
-└── 12. Frontend Updates
+├── 12. Frontend Updates
+└── 12.1 Superadmin Operations Hardening
+    1. Restaurant Detail Page
+    2. Audit Log
+    3. Safe Impersonation
+    4. Tenant Lifecycle Management
+    5. Search / Filter / Pagination
+    6. Platform User Management
+    7. Billing Operations Expansion
+    8. System Health / Platform Metrics
+    9. Moderation Workflow
+    10. Superadmin Test Coverage
 
 Phase 6 (Configuration)
 ├── 13. Environment Variables

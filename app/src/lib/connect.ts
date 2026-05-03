@@ -6,6 +6,7 @@ const DEFAULT_DATABASE_URL =
 // ประกาศ pool ตัวเดียว (global)
 let pool: any = null;
 let tablesTenantSchemaPromise: Promise<void> | null = null;
+let salesSchemaPromise: Promise<void> | null = null;
 
 // ฟังก์ชัน getDB
 export function getDB() {
@@ -117,6 +118,85 @@ export async function ensureTablesTenantSchema() {
   }
 
   await tablesTenantSchemaPromise;
+}
+
+export async function ensureSalesSchema() {
+  if (!salesSchemaPromise) {
+    salesSchemaPromise = (async () => {
+      const db = getDB();
+
+      await db.query(`
+        ALTER TABLE orders
+          ADD COLUMN IF NOT EXISTS subtotal NUMERIC(12, 2) NOT NULL DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS service_charge_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS tax_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS grand_total NUMERIC(12, 2) NOT NULL DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS payment_status VARCHAR(30) NOT NULL DEFAULT 'unpaid',
+          ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS voided_at TIMESTAMP
+      `);
+
+      await db.query(`
+        CREATE INDEX IF NOT EXISTS idx_orders_sales_paid
+          ON orders(restaurant_id, payment_status, paid_at)
+      `);
+      await db.query(`
+        CREATE INDEX IF NOT EXISTS idx_orders_sales_status_created
+          ON orders(restaurant_id, status, created_at)
+      `);
+      await db.query(`
+        CREATE INDEX IF NOT EXISTS idx_order_items_order_restaurant
+          ON order_items(order_id, restaurant_id)
+      `);
+      await db.query(`
+        CREATE INDEX IF NOT EXISTS idx_tables_restaurant_status
+          ON tables(restaurant_id, status)
+      `);
+
+      await db.query(`
+        WITH totals AS (
+          SELECT
+            o.id,
+            o.restaurant_id,
+            COALESCE(SUM(oi.quantity * oi.price::numeric), 0) AS subtotal
+          FROM orders o
+          LEFT JOIN order_items oi
+            ON oi.order_id = o.id
+           AND oi.restaurant_id = o.restaurant_id
+          GROUP BY o.id, o.restaurant_id
+        )
+        UPDATE orders o
+           SET subtotal = totals.subtotal,
+               grand_total = totals.subtotal,
+               payment_status = CASE
+                 WHEN o.status = 'completed' AND o.payment_status = 'unpaid'
+                   THEN 'paid'
+                 ELSE o.payment_status
+               END,
+               paid_at = CASE
+                 WHEN o.status = 'completed' AND o.paid_at IS NULL
+                   THEN COALESCE(o.completed_at, o.created_at)
+                 ELSE o.paid_at
+               END,
+               completed_at = CASE
+                 WHEN o.status = 'completed' AND o.completed_at IS NULL
+                   THEN COALESCE(o.paid_at, o.created_at)
+                 ELSE o.completed_at
+               END
+          FROM totals
+         WHERE o.id = totals.id
+           AND o.restaurant_id = totals.restaurant_id
+      `);
+    })().catch((error) => {
+      salesSchemaPromise = null;
+      throw error;
+    });
+  }
+
+  await salesSchemaPromise;
 }
 
 //export const db = getDB();

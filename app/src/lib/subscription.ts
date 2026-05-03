@@ -22,12 +22,6 @@ export const BILLING_LOCKED_STATUSES = new Set<SubscriptionStatus>([
 
 let subscriptionSchemaPromise: Promise<void> | null = null;
 
-function addMonths(date: Date, months: number) {
-  const next = new Date(date);
-  next.setMonth(next.getMonth() + months);
-  return next;
-}
-
 export function isSubscriptionBlocked(status: string | null | undefined) {
   return BILLING_LOCKED_STATUSES.has(
     String(status || "") as SubscriptionStatus,
@@ -274,41 +268,34 @@ export async function renewRestaurantSubscription(input: {
   note?: string | null;
   activatedByUserId?: number | null;
 }) {
-  const months = Math.max(1, Number(input.months || 1));
-  const snapshot = await getRestaurantSubscriptionSnapshot(input.restaurantId);
-  const anchor =
-    snapshot?.current_period_end && new Date(snapshot.current_period_end) > new Date()
-      ? new Date(snapshot.current_period_end)
-      : new Date();
-  const periodStart = new Date();
-  const periodEnd = addMonths(anchor, months);
-  const graceEndsAt = addMonths(periodEnd, 0);
-  graceEndsAt.setDate(graceEndsAt.getDate() + 7);
+  const months = Math.max(1, Math.floor(Number(input.months || 1)));
+  await getRestaurantSubscriptionSnapshot(input.restaurantId);
 
   await db.query(
     `
+      WITH renewal_anchor AS (
+        SELECT
+          restaurant_id,
+          GREATEST(current_period_end, NOW()) AS anchor_at
+        FROM subscriptions
+        WHERE restaurant_id = $1
+      )
       UPDATE subscriptions
          SET plan_code = COALESCE($2, plan_code),
              status = 'active',
-             current_period_start = $3,
-             current_period_end = $4,
-             grace_ends_at = $5,
+             current_period_start = NOW(),
+             current_period_end = renewal_anchor.anchor_at + ($3::int * INTERVAL '1 month'),
+             grace_ends_at = renewal_anchor.anchor_at + ($3::int * INTERVAL '1 month') + INTERVAL '7 day',
              cancel_at_period_end = false,
              renewal_requested_at = NULL,
-             renewal_request_note = COALESCE($6, renewal_request_note),
+             renewal_request_note = COALESCE($4, renewal_request_note),
              last_payment_at = NOW(),
              activated_at = NOW(),
              updated_at = NOW()
-       WHERE restaurant_id = $1
+        FROM renewal_anchor
+       WHERE subscriptions.restaurant_id = renewal_anchor.restaurant_id
     `,
-    [
-      input.restaurantId,
-      input.planCode || null,
-      periodStart,
-      periodEnd,
-      graceEndsAt,
-      input.note || null,
-    ],
+    [input.restaurantId, input.planCode || null, months, input.note || null],
   );
 
   return getRestaurantSubscriptionSnapshot(input.restaurantId);

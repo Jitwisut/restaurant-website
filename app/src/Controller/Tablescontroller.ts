@@ -13,9 +13,83 @@ import {
   getRestaurantSubscriptionSnapshot,
   isSubscriptionBlocked,
 } from "../lib/subscription";
+import {
+  getRestaurantSettings,
+  isTableSessionExpired,
+} from "../lib/restaurantSettings";
 
-const baseurl = Bun.env.ORIGIN_URL;
 const db = getDB();
+
+function getFrontendBaseUrl(context: any) {
+  const configured =
+    Bun.env.ORIGIN_URL ||
+    Bun.env.FRONTEND_URL ||
+    Bun.env.NEXT_PUBLIC_FRONTEND_URL ||
+    Bun.env.ORIGIN_URL2;
+  const requestOrigin =
+    context.headers?.origin ||
+    context.headers?.Origin ||
+    context.request?.headers?.get?.("origin");
+
+  return String(configured || requestOrigin || "http://localhost:3000").replace(
+    /\/$/,
+    "",
+  );
+}
+
+async function markSessionOrdersPaid(
+  restaurantId: string | number,
+  sessionId: string,
+) {
+  const settingsPayload = await getRestaurantSettings(Number(restaurantId));
+  const orderSettings = settingsPayload?.settings?.order_settings || {};
+  const serviceChargeRate =
+    Number(orderSettings.serviceChargePercent || 0) / 100;
+  const taxRate = Number(orderSettings.taxPercent || 0) / 100;
+
+  return db.query(
+    `WITH order_totals AS (
+       SELECT
+         o.id,
+         COALESCE(SUM(oi.quantity * oi.price::numeric), 0) AS subtotal
+       FROM orders o
+       LEFT JOIN order_items oi
+         ON oi.order_id = o.id
+        AND oi.restaurant_id = o.restaurant_id
+       WHERE o.restaurant_id = $1
+         AND o.customer_session = $2
+         AND o.status <> 'cancelled'
+       GROUP BY o.id
+     )
+     UPDATE orders o
+        SET status = 'completed',
+            subtotal = order_totals.subtotal,
+            service_charge_amount = ROUND(order_totals.subtotal * $3::numeric, 2),
+            tax_amount = ROUND(
+              (order_totals.subtotal + ROUND(order_totals.subtotal * $3::numeric, 2) - o.discount_amount)
+                * $4::numeric,
+              2
+            ),
+            grand_total = GREATEST(
+              order_totals.subtotal
+                - o.discount_amount
+                + ROUND(order_totals.subtotal * $3::numeric, 2)
+                + ROUND(
+                  (order_totals.subtotal + ROUND(order_totals.subtotal * $3::numeric, 2) - o.discount_amount)
+                    * $4::numeric,
+                  2
+                ),
+              0
+            ),
+            payment_status = 'paid',
+            paid_at = COALESCE(o.paid_at, NOW()),
+            completed_at = COALESCE(o.completed_at, NOW())
+       FROM order_totals
+      WHERE o.id = order_totals.id
+        AND o.restaurant_id = $1`,
+    [restaurantId, sessionId, serviceChargeRate, taxRate],
+  );
+}
 
 export const Tablecontroller = {
   gettable: async (context: Context & { jwt?: any }) => {
@@ -55,7 +129,7 @@ export const Tablecontroller = {
     }
 
     const qrPath = `/order/${hash}`;
-    const fullURL = `${baseurl}${qrPath}`;
+    const fullURL = `${getFrontendBaseUrl(context)}${qrPath}`;
 
     try {
       const qrBase64 = await QRCode.toDataURL(fullURL);
@@ -77,9 +151,61 @@ export const Tablecontroller = {
       );
 
       if (result.rowCount === 0) {
-        await db.query("ROLLBACK");
-        set.status = 409;
-        return { message: "Table is already open or not found" };
+        const existing = await db.query(
+          `SELECT table_number, status, customer_session
+             FROM tables
+            WHERE table_number = $1
+              AND restaurant_id = $2
+            LIMIT 1`,
+          [tableNumber, scope.restaurantId],
+        );
+        const oldSessionId = existing.rows[0]?.customer_session;
+        const activeSession = oldSessionId
+          ? await findActiveSessionByHash(db, String(oldSessionId))
+          : null;
+        const settingsPayload = await getRestaurantSettings(
+          Number(scope.restaurantId),
+        );
+        const canRotateExpiredSession =
+          existing.rows[0]?.status === "open" &&
+          activeSession &&
+          settingsPayload?.settings &&
+          isTableSessionExpired(activeSession, settingsPayload.settings);
+
+        if (!canRotateExpiredSession) {
+          await db.query("ROLLBACK");
+          set.status = 409;
+          return { message: "Table is already open or not found" };
+        }
+
+        await db.query(
+          `UPDATE sessions
+              SET closed_at = NOW()
+            WHERE session_id::text = $1
+              AND restaurant_id = $2
+              AND closed_at IS NULL`,
+          [String(oldSessionId), scope.restaurantId],
+        );
+        const rotated = await db.query(
+          `UPDATE tables
+              SET status = 'open',
+                  opened_at = NOW(),
+                  customer_session = $1,
+                  qr_code_url = $2
+            WHERE table_number = $3
+              AND restaurant_id = $4
+            RETURNING table_number, status, opened_at, customer_session, qr_code_url`,
+          [hash, qrBase64, tableNumber, scope.restaurantId],
+        );
+
+        await db.query("COMMIT");
+        return {
+          message: "Open table success",
+          table_number: tableNumber,
+          session_hash: hash,
+          qr_code_url: rotated.rows[0].qr_code_url,
+          fullurl: fullURL,
+        };
       }
 
       await db.query("COMMIT");
@@ -170,10 +296,9 @@ export const Tablecontroller = {
         }
       }
 
-      await db.query(
-        "UPDATE orders SET status='completed' WHERE table_number=$1 AND restaurant_id=$2",
-        [tableNumber, scope.restaurantId],
-      );
+      if (closedSessionId) {
+        await markSessionOrdersPaid(scope.restaurantId, String(closedSessionId));
+      }
 
       return { message: "Close table success", table_number: tableNumber };
     } catch (err) {
@@ -302,10 +427,21 @@ export const Tablecontroller = {
       return { message: "No table number" };
     }
 
-    await db.query(
-      "UPDATE orders SET status='completed' WHERE table_number=$1 AND restaurant_id=$2",
+    const currentTable = await db.query(
+      `SELECT customer_session
+         FROM tables
+        WHERE table_number = $1
+          AND restaurant_id = $2`,
       [tablenumber, scope.restaurantId],
     );
+
+    const sessionId = currentTable.rows?.[0]?.customer_session;
+    if (!sessionId) {
+      set.status = 404;
+      return { message: "No active table session" };
+    }
+
+    await markSessionOrdersPaid(scope.restaurantId, String(sessionId));
     return { message: "success" };
   },
 
