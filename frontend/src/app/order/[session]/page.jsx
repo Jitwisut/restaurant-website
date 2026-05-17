@@ -1,7 +1,6 @@
 "use client";
 
 import axios from "axios";
-import QRCode from "qrcode";
 import toast, { Toaster } from "react-hot-toast";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
@@ -11,53 +10,22 @@ import { useAuth } from "@/app/components/AuthProvider";
 const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL;
 const guestTokenKey = (sessionHash) => `restaurantos.guest.${sessionHash}`;
 
-function formatTlv(id, value) {
-  const text = String(value ?? "");
-  return `${id}${String(text.length).padStart(2, "0")}${text}`;
+function formatMoney(amount) {
+  return Number(amount || 0).toLocaleString("th-TH", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 }
 
-function crc16Ccitt(value) {
-  let crc = 0xffff;
-  for (let index = 0; index < value.length; index += 1) {
-    crc ^= value.charCodeAt(index) << 8;
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc = crc & 0x8000 ? (crc << 1) ^ 0x1021 : crc << 1;
-      crc &= 0xffff;
-    }
-  }
-  return crc.toString(16).toUpperCase().padStart(4, "0");
-}
-
-function normalizePromptPayId(type, value) {
-  const raw = String(value || "").replace(/[^\d]/g, "");
-  if (type === "phone") {
-    if (raw.startsWith("66")) return `00${raw}`;
-    if (raw.startsWith("0")) return `0066${raw.slice(1)}`;
-  }
-  return raw;
-}
-
-function buildPromptPayPayload(orderSettings, amount) {
-  if (orderSettings.promptPayType === "bank_account") return null;
-  const target = normalizePromptPayId(
-    orderSettings.promptPayType,
-    orderSettings.promptPayId,
-  );
-  if (!target) return null;
-
-  const merchantAccount = formatTlv("00", "A000000677010111") + formatTlv("01", target);
-  const withoutCrc = [
-    formatTlv("00", "01"),
-    formatTlv("01", "12"),
-    formatTlv("29", merchantAccount),
-    formatTlv("53", "764"),
-    formatTlv("54", Number(amount || 0).toFixed(2)),
-    formatTlv("58", "TH"),
-    formatTlv("59", (orderSettings.promptPayAccountName || "RESTAURANT").slice(0, 25)),
-    formatTlv("60", "BANGKOK"),
-  ].join("");
-  const payload = `${withoutCrc}6304`;
-  return `${payload}${crc16Ccitt(payload)}`;
+function formatOrderDate(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleString("th-TH", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "Asia/Bangkok",
+  });
 }
 
 const getCategoryIcon = (category) => {
@@ -83,7 +51,9 @@ export default function OrderPage() {
   const [wsReady, setWsReady] = useState(false);
   const [wsError, setWsError] = useState("");
   const [guestToken, setGuestToken] = useState(null);
-  const [promptPayQrDataUrl, setPromptPayQrDataUrl] = useState("");
+  const [orderHistoryOpen, setOrderHistoryOpen] = useState(false);
+  const [orderHistory, setOrderHistory] = useState([]);
+  const [orderHistoryLoading, setOrderHistoryLoading] = useState(false);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
@@ -106,7 +76,7 @@ export default function OrderPage() {
       wsRef.current = null;
     }
 
-    router.replace("/table-closed");
+    router.replace(`/table-closed?session=${encodeURIComponent(String(sessionHash))}`);
   }, [router, sessionHash]);
 
   useEffect(() => {
@@ -184,6 +154,32 @@ export default function OrderPage() {
       window.localStorage.removeItem(`cart_${sessionHash}`);
     }
   }, [cart, sessionHash]);
+
+  const loadOrderHistory = useCallback(async () => {
+    if (!guestToken) {
+      toast.error("ยังโหลดประวัติคำสั่งซื้อไม่ได้");
+      return;
+    }
+
+    setOrderHistoryLoading(true);
+    try {
+      const response = await axios.get(
+        `${API_BASE}/tables/session/${encodeURIComponent(String(sessionHash))}/orders`,
+        {
+          headers: {
+            Authorization: `Bearer ${guestToken}`,
+          },
+        },
+      );
+      setOrderHistory(response.data.orders || []);
+    } catch (error) {
+      toast.error(
+        error.response?.data?.message || "โหลดประวัติคำสั่งซื้อไม่สำเร็จ",
+      );
+    } finally {
+      setOrderHistoryLoading(false);
+    }
+  }, [guestToken, sessionHash]);
 
   useEffect(() => {
     if (!sessionHash || !wsToken) {
@@ -313,37 +309,7 @@ export default function OrderPage() {
       ).toFixed(2),
     [serviceChargeAmount, taxAmount, totalPrice],
   );
-  const promptPayEnabled = Boolean(
-    orderSettings.paymentMethods?.qrPromptPay &&
-      (orderSettings.promptPayId ||
-        orderSettings.bankAccountNumber ||
-        orderSettings.promptPayAccountName),
-  );
   const placeholderImageUrl = settings?.menu_settings?.placeholderImageUrl || "";
-
-  useEffect(() => {
-    let cancelled = false;
-    const payload = promptPayEnabled
-      ? buildPromptPayPayload(orderSettings, finalTotal)
-      : null;
-
-    if (!payload) {
-      setPromptPayQrDataUrl("");
-      return;
-    }
-
-    QRCode.toDataURL(payload, { margin: 1, width: 220 })
-      .then((dataUrl) => {
-        if (!cancelled) setPromptPayQrDataUrl(dataUrl);
-      })
-      .catch(() => {
-        if (!cancelled) setPromptPayQrDataUrl("");
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [finalTotal, orderSettings, promptPayEnabled]);
 
   const addToCart = (item) => {
     setCart((current) => {
@@ -394,6 +360,11 @@ export default function OrderPage() {
         },
       }),
     );
+  };
+
+  const openOrderHistory = async () => {
+    setOrderHistoryOpen(true);
+    await loadOrderHistory();
   };
 
   const callStaff = () => {
@@ -507,7 +478,11 @@ export default function OrderPage() {
             })}
           </div>
           <div className="mt-auto border-t border-slate-200 pt-4 flex flex-col gap-2">
-            <button className="text-slate-600 dark:text-slate-400 hover:text-indigo-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all duration-200 ease-in-out flex items-center gap-3 px-4 py-2 rounded-lg text-left w-full">
+            <button
+              type="button"
+              onClick={openOrderHistory}
+              className="text-slate-600 dark:text-slate-400 hover:text-indigo-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all duration-200 ease-in-out flex items-center gap-3 px-4 py-2 rounded-lg text-left w-full"
+            >
               <span className="material-symbols-outlined text-sm">history</span>
               <span className="text-xs">Order History</span>
             </button>
@@ -713,34 +688,6 @@ export default function OrderPage() {
                   ฿{taxAmount}
                 </span>
               </div>
-              {promptPayEnabled && (
-                <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
-                  <p className="font-bold">
-                    {orderSettings.promptPayType === "bank_account"
-                      ? "โอนบัญชีธนาคาร"
-                      : "QR PromptPay"}
-                  </p>
-                  {promptPayQrDataUrl && (
-                    <>
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={promptPayQrDataUrl}
-                        alt="PromptPay QR"
-                        className="mx-auto my-3 h-40 w-40 rounded-lg bg-white p-2"
-                      />
-                    </>
-                  )}
-                  <p>
-                    {orderSettings.promptPayType === "bank_account"
-                      ? `บัญชี ${orderSettings.bankAccountNumber || "-"}`
-                      : `PromptPay ${orderSettings.promptPayId || "-"}`}
-                  </p>
-                  <p>{orderSettings.promptPayAccountName || ""}</p>
-                  <p className="mt-1 text-xs">
-                    ใช้ยอดชำระ ฿{finalTotal} สำหรับสร้าง QR/โอนเงิน
-                  </p>
-                </div>
-              )}
               <div className="flex justify-between items-center mb-6 pt-2 border-t border-outline-variant">
                 <span className="font-h3 text-h3 text-on-surface">Total</span>
                 <span className="font-h3 text-h3 text-primary-container">
@@ -761,6 +708,105 @@ export default function OrderPage() {
           </aside>
         </main>
       </div>
+
+      {orderHistoryOpen ? (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40 p-4"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setOrderHistoryOpen(false);
+            }
+          }}
+        >
+          <section className="flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">
+                  Order History
+                </p>
+                <h2 className="mt-1 text-xl font-bold text-slate-950">
+                  Table {table?.table_number || "-"}
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOrderHistoryOpen(false)}
+                className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-slate-600 hover:bg-slate-200"
+                aria-label="Close order history"
+              >
+                <span className="material-symbols-outlined text-lg">close</span>
+              </button>
+            </div>
+
+            <div className="overflow-y-auto p-5">
+              {orderHistoryLoading ? (
+                <div className="rounded-lg bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                  Loading order history...
+                </div>
+              ) : orderHistory.length === 0 ? (
+                <div className="rounded-lg bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                  ยังไม่มีประวัติการสั่งอาหารสำหรับโต๊ะนี้
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {orderHistory.map((order) => {
+                    const items = Array.isArray(order.items) ? order.items : [];
+                    return (
+                      <article
+                        key={order.id}
+                        className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-3">
+                          <div>
+                            <p className="text-sm font-bold text-slate-950">
+                              Order #{String(order.id || "").slice(-8)}
+                            </p>
+                            <p className="mt-1 text-xs text-slate-500">
+                              {formatOrderDate(order.created_at)}
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <span className="inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-bold uppercase text-slate-700">
+                              {order.status || "pending"}
+                            </span>
+                            <p className="mt-2 text-sm font-bold text-slate-950">
+                              ฿{formatMoney(order.total)}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="mt-3 divide-y divide-slate-100">
+                          {items.map((item, index) => (
+                            <div
+                              key={`${order.id}-${item.menu_item_name || "item"}-${index}`}
+                              className="flex items-start justify-between gap-3 py-2 text-sm"
+                            >
+                              <div>
+                                <p className="font-medium text-slate-800">
+                                  {item.quantity || 0}x{" "}
+                                  {item.menu_item_name || "Menu item"}
+                                </p>
+                                {item.notes ? (
+                                  <p className="mt-1 text-xs text-slate-500">
+                                    {item.notes}
+                                  </p>
+                                ) : null}
+                              </div>
+                              <span className="shrink-0 font-semibold text-slate-900">
+                                ฿{formatMoney(item.subtotal)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }

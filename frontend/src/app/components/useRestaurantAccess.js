@@ -17,7 +17,10 @@ export function useRestaurantAccess(allowedRoles = []) {
   const pathname = usePathname();
   const slug = typeof params?.slug === "string" ? params.slug : null;
   const rolesKey = allowedRoles.join("|");
-  const allowedRoleList = rolesKey ? rolesKey.split("|") : [];
+  const allowedRoleList = useMemo(
+    () => (rolesKey ? rolesKey.split("|") : []),
+    [rolesKey],
+  );
 
   const canonicalPath = useMemo(() => {
     if (!auth?.restaurantSlug) return null;

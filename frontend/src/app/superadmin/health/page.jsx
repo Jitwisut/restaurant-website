@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Swal from "sweetalert2";
 import { createApiClient } from "@/lib/api";
@@ -32,7 +32,7 @@ export default function SuperadminHealthPage() {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!auth?.token || auth?.role !== "superadmin") return;
     setLoading(true);
     try {
@@ -51,7 +51,7 @@ export default function SuperadminHealthPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [api, auth?.role, auth?.token]);
 
   useEffect(() => {
     if (!ready) return;
@@ -64,7 +64,7 @@ export default function SuperadminHealthPage() {
       return;
     }
     load();
-  }, [auth, ready, router]);
+  }, [auth, load, ready, router]);
 
   if (!ready || loading) {
     return (

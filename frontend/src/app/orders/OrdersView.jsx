@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 function cx(...classes) {
   return classes.filter(Boolean).join(" ");
@@ -30,6 +30,27 @@ function calcItemsCount(items = []) {
   return items.reduce((sum, it) => sum + (it?.quantity ?? 0), 0);
 }
 
+const orderStatusOptions = [
+  "all",
+  "pending",
+  "accepted",
+  "preparing",
+  "ready",
+  "completed",
+  "cancelled",
+  "rejected",
+];
+
+const paymentStatusOptions = [
+  "all",
+  "unpaid",
+  "pending_review",
+  "paid",
+  "rejected",
+  "refunded",
+  "voided",
+];
+
 function statusMeta(status) {
   switch (status) {
     case "completed":
@@ -44,6 +65,31 @@ function statusMeta(status) {
         label: "รอดำเนินการ",
         badge: "bg-amber-500/10 text-amber-800 ring-1 ring-amber-500/20",
         dot: "bg-amber-500",
+      };
+    case "accepted":
+      return {
+        label: "Accepted",
+        badge: "bg-sky-500/10 text-sky-700 ring-1 ring-sky-500/20",
+        dot: "bg-sky-500",
+      };
+    case "preparing":
+      return {
+        label: "Preparing",
+        badge: "bg-orange-500/10 text-orange-700 ring-1 ring-orange-500/20",
+        dot: "bg-orange-500",
+      };
+    case "ready":
+    case "done":
+      return {
+        label: "Ready",
+        badge: "bg-indigo-500/10 text-indigo-700 ring-1 ring-indigo-500/20",
+        dot: "bg-indigo-500",
+      };
+    case "rejected":
+      return {
+        label: "Rejected",
+        badge: "bg-rose-500/10 text-rose-700 ring-1 ring-rose-500/20",
+        dot: "bg-rose-500",
       };
     case "cancelled":
       return {
@@ -83,23 +129,125 @@ function Row({ k, v }) {
   );
 }
 
-export default function OrdersView({ orders = [] }) {
+function liveMeta(liveStatus) {
+  switch (liveStatus) {
+    case "connected":
+      return {
+        label: "Live",
+        className: "bg-emerald-500",
+        textClassName: "text-emerald-700",
+      };
+    case "connecting":
+      return {
+        label: "Connecting",
+        className: "bg-amber-500",
+        textClassName: "text-amber-700",
+      };
+    default:
+      return {
+        label: "Offline",
+        className: "bg-rose-500",
+        textClassName: "text-rose-700",
+      };
+  }
+}
+
+export default function OrdersView({
+  orders = [],
+  liveStatus = "disconnected",
+  lastLiveAt = null,
+  actionError = "",
+  onRefresh,
+  onUpdateStatus,
+  onSubmitPaymentProof,
+  onReviewPayment,
+}) {
   const [openId, setOpenId] = useState(orders?.[0]?.id ?? null);
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [paymentFilter, setPaymentFilter] = useState("all");
+  const [tableFilter, setTableFilter] = useState("");
+  const [notificationState, setNotificationState] = useState("idle");
+  const [busyAction, setBusyAction] = useState("");
+  const live = liveMeta(liveStatus);
+
+  useEffect(() => {
+    if (!openId && orders?.[0]?.id) {
+      setOpenId(orders[0].id);
+    }
+  }, [openId, orders]);
+
+  const filteredOrders = useMemo(() => {
+    return orders.filter((order) => {
+      const matchesStatus =
+        statusFilter === "all" || order.status === statusFilter;
+      const matchesPayment =
+        paymentFilter === "all" || order.payment_status === paymentFilter;
+      const matchesTable =
+        !tableFilter ||
+        String(order.table_number || "").includes(tableFilter.trim());
+      return matchesStatus && matchesPayment && matchesTable;
+    });
+  }, [orders, paymentFilter, statusFilter, tableFilter]);
 
   const stats = useMemo(() => {
-    const revenue = orders.reduce(
+    const revenue = filteredOrders.reduce(
       (sum, o) => sum + Number.parseFloat(o.total || "0"),
       0
     );
-    const tables = new Set(orders.map((o) => o.table_number));
-    const items = orders.reduce((sum, o) => sum + calcItemsCount(o.items), 0);
+    const tables = new Set(filteredOrders.map((o) => o.table_number));
+    const items = filteredOrders.reduce((sum, o) => sum + calcItemsCount(o.items), 0);
     return {
       revenue,
-      orderCount: orders.length,
+      orderCount: filteredOrders.length,
       tableCount: tables.size,
       items,
     };
-  }, [orders]);
+  }, [filteredOrders]);
+
+  const enableNotifications = async () => {
+    if (typeof window === "undefined" || !("Notification" in window)) {
+      setNotificationState("unsupported");
+      return;
+    }
+    if (window.Notification.permission === "granted") {
+      setNotificationState("enabled");
+      return;
+    }
+    const permission = await window.Notification.requestPermission();
+    setNotificationState(permission === "granted" ? "enabled" : "denied");
+  };
+
+  const runStatusUpdate = async (order, status) => {
+    if (!onUpdateStatus) return;
+    let reason = "";
+    if (status === "cancelled" || status === "rejected") {
+      reason = window.prompt("Reason is required") || "";
+      if (!reason.trim()) return;
+    }
+    setBusyAction(`${order.id}:status`);
+    await onUpdateStatus(order.id, status, reason);
+    setBusyAction("");
+  };
+
+  const runSubmitProof = async (order) => {
+    if (!onSubmitPaymentProof) return;
+    const reference = window.prompt("Slip/reference number") || "";
+    if (!reference.trim()) return;
+    const note = window.prompt("Payment note (optional)") || "";
+    setBusyAction(`${order.id}:proof`);
+    await onSubmitPaymentProof(order.id, reference, note);
+    setBusyAction("");
+  };
+
+  const runPaymentAction = async (order, action) => {
+    if (!onReviewPayment) return;
+    const needsReason = ["reject", "refund", "void"].includes(action);
+    const note = window.prompt(needsReason ? "Reason" : "Review note (optional)") || "";
+    if (needsReason && !note.trim()) return;
+    setBusyAction(`${order.id}:${action}`);
+    await onReviewPayment(order.id, action, note);
+    setBusyAction("");
+  };
 
   return (
     <main className="min-h-dvh bg-gradient-to-b from-orange-50 via-amber-50 to-white">
@@ -119,8 +267,34 @@ export default function OrdersView({ orders = [] }) {
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={enableNotifications}
+              className="rounded-xl bg-white/80 backdrop-blur ring-1 ring-orange-100 px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-orange-50"
+            >
+              Notifications: {notificationState === "idle" ? "Enable" : notificationState}
+            </button>
+            <button
+              type="button"
+              onClick={onRefresh}
+              className="rounded-xl bg-white/80 backdrop-blur ring-1 ring-orange-100 px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-orange-50"
+            >
+              Refresh
+            </button>
+            <div className="rounded-xl bg-white/80 backdrop-blur ring-1 ring-orange-100 px-3 py-2 text-xs shadow-sm">
+              <span className={cx("inline-flex items-center gap-2 font-semibold", live.textClassName)}>
+                <span
+                  className={cx(
+                    "h-1.5 w-1.5 rounded-full",
+                    live.className,
+                    liveStatus === "connected" && "animate-pulse",
+                  )}
+                />
+                {live.label}
+              </span>
+            </div>
             <div className="rounded-xl bg-white/80 backdrop-blur ring-1 ring-orange-100 px-3 py-2 text-xs text-slate-600 shadow-sm">
-              อัปเดตล่าสุด: {formatDateTime(new Date().toISOString())}
+              อัปเดตล่าสุด: {formatDateTime(lastLiveAt || new Date().toISOString())}
             </div>
           </div>
         </header>
@@ -141,6 +315,61 @@ export default function OrdersView({ orders = [] }) {
         </section>
 
         <section className="mt-6">
+          <div className="mb-4 rounded-2xl bg-white/70 p-4 shadow-sm ring-1 ring-orange-100">
+            <div className="grid gap-3 md:grid-cols-4">
+              <label className="text-xs font-semibold text-slate-600">
+                Order status
+                <select
+                  value={statusFilter}
+                  onChange={(event) => setStatusFilter(event.target.value)}
+                  className="mt-1 w-full rounded-lg border border-orange-100 bg-white px-3 py-2 text-sm text-slate-900"
+                >
+                  {orderStatusOptions.map((status) => (
+                    <option key={status} value={status}>{status}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                Payment status
+                <select
+                  value={paymentFilter}
+                  onChange={(event) => setPaymentFilter(event.target.value)}
+                  className="mt-1 w-full rounded-lg border border-orange-100 bg-white px-3 py-2 text-sm text-slate-900"
+                >
+                  {paymentStatusOptions.map((status) => (
+                    <option key={status} value={status}>{status}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                Table
+                <input
+                  value={tableFilter}
+                  onChange={(event) => setTableFilter(event.target.value)}
+                  placeholder="Table number"
+                  className="mt-1 w-full rounded-lg border border-orange-100 bg-white px-3 py-2 text-sm text-slate-900"
+                />
+              </label>
+              <div className="flex items-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStatusFilter("all");
+                    setPaymentFilter("all");
+                    setTableFilter("");
+                  }}
+                  className="h-10 w-full rounded-lg border border-orange-100 bg-white text-sm font-semibold text-slate-700 transition hover:bg-orange-50"
+                >
+                  Clear filters
+                </button>
+              </div>
+            </div>
+            {actionError ? (
+              <div className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                {actionError}
+              </div>
+            ) : null}
+          </div>
           <div className="rounded-2xl bg-white/70 backdrop-blur ring-1 ring-orange-100 shadow-sm">
             <div className="flex items-center justify-between gap-3 border-b border-orange-100 px-4 py-3">
               <div className="text-sm font-semibold text-slate-900">
@@ -152,7 +381,7 @@ export default function OrdersView({ orders = [] }) {
             </div>
 
             <div className="divide-y divide-orange-100">
-              {orders.map((o) => {
+              {filteredOrders.map((o) => {
                 const meta = statusMeta(o.status);
                 const isOpen = openId === o.id;
                 const itemCount = calcItemsCount(o.items);
@@ -189,6 +418,7 @@ export default function OrdersView({ orders = [] }) {
                           <div>สร้าง: {formatDateTime(o.created_at)}</div>
                           <div>เปิดโต๊ะ: {formatDateTime(o.opened_at)}</div>
                           <div>ปิดโต๊ะ: {formatDateTime(o.closed_at)}</div>
+                          <div>Payment: {o.payment_status || "unpaid"}</div>
                         </div>
                       </div>
 
@@ -217,6 +447,18 @@ export default function OrdersView({ orders = [] }) {
                         >
                           {isOpen ? "ซ่อนรายละเอียด" : "ดูรายละเอียด"}
                         </button>
+                        <select
+                          value={o.status || "pending"}
+                          onChange={(event) => runStatusUpdate(o, event.target.value)}
+                          disabled={busyAction === `${o.id}:status`}
+                          className="rounded-xl border border-orange-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 shadow-sm"
+                        >
+                          {orderStatusOptions
+                            .filter((status) => status !== "all")
+                            .map((status) => (
+                              <option key={status} value={status}>{status}</option>
+                            ))}
+                        </select>
                       </div>
                     </div>
 
@@ -294,10 +536,57 @@ export default function OrdersView({ orders = [] }) {
                           <div className="mt-3">
                             <Row k="โต๊ะ" v={`โต๊ะ ${o.table_number}`} />
                             <Row k="สถานะ" v={meta.label} />
+                            <Row k="Payment" v={o.payment_status || "unpaid"} />
+                            <Row k="Reference" v={o.payment_reference || "-"} />
                             <Row k="Session ID" v={o.session_id || "-"} />
                             <Row k="Created at" v={formatDateTime(o.created_at)} />
                             <Row k="Opened at" v={formatDateTime(o.opened_at)} />
                             <Row k="Closed at" v={formatDateTime(o.closed_at)} />
+                          </div>
+
+                          <div className="mt-4 grid gap-2">
+                            <button
+                              type="button"
+                              onClick={() => runSubmitProof(o)}
+                              disabled={busyAction === `${o.id}:proof`}
+                              className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60"
+                            >
+                              Submit slip/reference
+                            </button>
+                            <div className="grid grid-cols-2 gap-2">
+                              <button
+                                type="button"
+                                onClick={() => runPaymentAction(o, "approve")}
+                                disabled={busyAction === `${o.id}:approve`}
+                                className="rounded-xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-60"
+                              >
+                                Approve
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => runPaymentAction(o, "reject")}
+                                disabled={busyAction === `${o.id}:reject`}
+                                className="rounded-xl bg-rose-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-rose-700 disabled:opacity-60"
+                              >
+                                Reject
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => runPaymentAction(o, "refund")}
+                                disabled={busyAction === `${o.id}:refund`}
+                                className="rounded-xl border border-orange-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-orange-50 disabled:opacity-60"
+                              >
+                                Refund
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => runPaymentAction(o, "void")}
+                                disabled={busyAction === `${o.id}:void`}
+                                className="rounded-xl border border-orange-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-orange-50 disabled:opacity-60"
+                              >
+                                Void
+                              </button>
+                            </div>
                           </div>
 
                           <div className="mt-4 rounded-xl bg-orange-50 ring-1 ring-orange-100 p-3">

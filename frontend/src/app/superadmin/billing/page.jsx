@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Swal from "sweetalert2";
 import { createApiClient } from "@/lib/api";
@@ -27,7 +27,7 @@ export default function SuperadminBillingRequestsPage() {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!auth?.token || auth?.role !== "superadmin") return;
     setLoading(true);
     try {
@@ -42,7 +42,7 @@ export default function SuperadminBillingRequestsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [api, auth?.role, auth?.token, status]);
 
   useEffect(() => {
     if (!ready) return;
@@ -55,7 +55,7 @@ export default function SuperadminBillingRequestsPage() {
       return;
     }
     load();
-  }, [auth, ready, router, status]);
+  }, [auth, load, ready, router]);
 
   const viewProof = async (request) => {
     try {

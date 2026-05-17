@@ -1,14 +1,19 @@
 "use client"; // ต้องการ interactivity (เช่น hover) ฝั่ง client
 
+import Image from "next/image";
+
 export default function Sidebar() {
   return (
     <aside className="w-96 bg-white p-4 flex flex-col gap-6">
       {/* ——— Logo & Burger ——— */}
       <header className="w-full inline-flex items-center justify-between gap-2.5">
         <a href="#">
-          <img
+          <Image
             src="https://pagedone.io/asset/uploads/1701235273.png"
             alt="Pagedone logo"
+            width={128}
+            height={32}
+            unoptimized
             className="w-auto h-8"
           />
         </a>

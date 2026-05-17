@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Swal from "sweetalert2";
 import { createApiClient } from "@/lib/api";
@@ -38,7 +38,7 @@ export default function SuperadminRestaurantDetailPage() {
 
   const restaurantId = params?.id;
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!auth?.token || auth?.role !== "superadmin" || !restaurantId) return;
     setLoading(true);
     try {
@@ -53,7 +53,7 @@ export default function SuperadminRestaurantDetailPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [api, auth?.role, auth?.token, restaurantId]);
 
   useEffect(() => {
     if (!ready) return;
@@ -66,7 +66,7 @@ export default function SuperadminRestaurantDetailPage() {
       return;
     }
     load();
-  }, [auth, ready, router, restaurantId]);
+  }, [auth, load, ready, router]);
 
   const runStatusAction = async (action) => {
     const requiresReason = ["reject", "suspend", "archive", "delete"].includes(action);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Swal from "sweetalert2";
 import { createApiClient } from "@/lib/api";
@@ -56,7 +56,7 @@ export default function SuperAdminPage() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [actionId, setActionId] = useState(null);
 
-  const loadRestaurants = async (page = pagination.page) => {
+  const loadRestaurants = useCallback(async (page = pagination.page) => {
     if (!auth?.token || auth?.role !== "superadmin") return;
 
     setLoading(true);
@@ -71,7 +71,7 @@ export default function SuperAdminPage() {
       const response = await api.get(`/superadmin/restaurants?${params.toString()}`);
       setRestaurants(response.data.items || []);
       setCounts((current) => ({ ...current, ...(response.data.counts || {}) }));
-      setPagination(response.data.pagination || pagination);
+      setPagination((current) => response.data.pagination || current);
     } catch (error) {
       Swal.fire({
         icon: "error",
@@ -81,7 +81,15 @@ export default function SuperAdminPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [
+    api,
+    auth?.role,
+    auth?.token,
+    pagination.page,
+    pagination.pageSize,
+    query,
+    statusFilter,
+  ]);
 
   useEffect(() => {
     if (!ready) return;
@@ -97,7 +105,7 @@ export default function SuperAdminPage() {
     }
 
     loadRestaurants(1);
-  }, [auth, ready, router]);
+  }, [auth, loadRestaurants, ready, router]);
 
   const pendingRestaurants = useMemo(
     () =>
@@ -297,15 +305,15 @@ export default function SuperAdminPage() {
         </div>
       </aside>
 
-      <main className="ml-64 flex min-h-screen flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex min-h-16 w-full items-center justify-between gap-4 border-b border-slate-100 bg-white/85 px-8 py-3 backdrop-blur-md">
-          <div className="flex flex-1 items-center gap-3">
-            <div className="relative w-full max-w-md">
+      <main className="ml-64 flex min-h-screen min-w-0 flex-1 flex-col">
+        <header className="sticky top-0 z-30 flex min-h-16 w-full flex-wrap items-center justify-between gap-3 border-b border-slate-100 bg-white/85 px-8 py-3 backdrop-blur-md">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
+            <div className="relative min-w-[280px] flex-1 sm:max-w-md">
               <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-lg text-slate-400">
                 search
               </span>
               <input
-                className="w-full rounded-lg border border-transparent bg-surface-container-low py-2 pl-10 pr-4 text-sm focus:border-primary focus:outline-none"
+                className="h-10 w-full rounded-lg border border-transparent bg-surface-container-low py-2 pl-10 pr-4 text-sm text-slate-700 focus:border-primary focus:outline-none"
                 placeholder="Search name, slug, or owner email"
                 type="text"
                 value={query}
@@ -318,7 +326,7 @@ export default function SuperAdminPage() {
             <select
               value={statusFilter}
               onChange={(event) => setStatusFilter(event.target.value)}
-              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600"
+              className="h-10 min-w-40 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600"
             >
               <option value="all">All statuses</option>
               <option value="pending">Pending</option>
@@ -330,7 +338,7 @@ export default function SuperAdminPage() {
             <button
               type="button"
               onClick={() => loadRestaurants(1)}
-              className="rounded-lg bg-primary px-4 py-2 text-sm font-bold text-white hover:bg-primary-container"
+              className="h-10 rounded-lg bg-primary px-5 text-sm font-bold text-white hover:bg-primary-container"
             >
               Apply
             </button>
@@ -338,8 +346,9 @@ export default function SuperAdminPage() {
           <button
             type="button"
             onClick={() => loadRestaurants(pagination.page)}
-            className="text-slate-500 hover:text-primary"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-primary"
             title="Refresh"
+            aria-label="Refresh restaurants"
           >
             <span className="material-symbols-outlined">refresh</span>
           </button>

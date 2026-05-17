@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import { createPortal } from "react-dom";
+import NextImage from "next/image";
 import {
     Upload,
     X,
@@ -8,7 +9,7 @@ import {
     DollarSign,
     Tag,
     Plus,
-    Image,
+    Image as ImageIcon,
     ChevronDown,
 } from "lucide-react";
 
@@ -192,7 +193,7 @@ export default function MenuUploadModal({
                     {/* Image Upload */}
                     <div>
                         <label className="block text-sm font-medium text-slate-700 mb-3">
-                            <Image className="w-4 h-4 inline mr-2" />
+                            <ImageIcon className="w-4 h-4 inline mr-2" />
                             รูปภาพเมนู
                         </label>
                         <div className="border-2 border-dashed border-slate-300 rounded-xl p-8 hover:border-emerald-400 transition-colors duration-200 text-center">
@@ -208,11 +209,14 @@ export default function MenuUploadModal({
                                 รองรับไฟล์: JPG, PNG, GIF (ขนาดไม่เกิน 5MB)
                             </p>
                             {imagePreview && (
-                                <div className="mt-4">
-                                    <img
+                                <div className="relative mt-4 mx-auto h-40 max-w-full overflow-hidden rounded-xl shadow-md">
+                                    <NextImage
                                         src={imagePreview}
-                                        alt="Preview"
-                                        className="max-w-full h-40 object-cover rounded-xl shadow-md mx-auto"
+                                        alt="Menu preview"
+                                        fill
+                                        sizes="(max-width: 672px) 100vw, 608px"
+                                        className="object-cover"
+                                        unoptimized
                                     />
                                 </div>
                             )}

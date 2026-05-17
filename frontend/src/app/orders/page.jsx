@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import OrdersView from "./OrdersView";
-import { createApiClient } from "@/lib/api";
+import { buildWsUrl, createApiClient } from "@/lib/api";
 import { useRestaurantAccess } from "../components/useRestaurantAccess";
 
 export default function OrdersPage() {
@@ -16,9 +16,15 @@ export default function OrdersPage() {
     () => createApiClient(auth?.token),
     [auth?.token],
   );
+  const wsRef = useRef(null);
+  const pingRef = useRef(null);
+  const retryRef = useRef(null);
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [liveStatus, setLiveStatus] = useState("connecting");
+  const [lastLiveAt, setLastLiveAt] = useState(null);
+  const [actionError, setActionError] = useState("");
 
   const fetchOrders = useCallback(async () => {
     if (!auth?.token) return;
@@ -44,6 +50,144 @@ export default function OrdersPage() {
       fetchOrders();
     }
   }, [allowed, fetchOrders, ready]);
+
+  const upsertOrder = useCallback((nextOrder) => {
+    if (!nextOrder?.id) return;
+
+    setOrders((current) => {
+      const existingIndex = current.findIndex((order) => order.id === nextOrder.id);
+      if (existingIndex === -1) return [nextOrder, ...current];
+
+      const merged = current.map((order) =>
+        order.id === nextOrder.id ? { ...order, ...nextOrder } : order,
+      );
+      return merged.sort(
+        (a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0),
+      );
+    });
+  }, []);
+
+  const updateOrderStatus = useCallback(async (orderId, status, reason = "") => {
+    setActionError("");
+    try {
+      const response = await api.post(`/order/${encodeURIComponent(orderId)}/status`, {
+        status,
+        reason,
+      });
+      upsertOrder(response.data.order);
+      return { ok: true };
+    } catch (requestError) {
+      const message =
+        requestError.normalizedMessage || "Unable to update order status";
+      setActionError(message);
+      return { ok: false, message };
+    }
+  }, [api, upsertOrder]);
+
+  const submitPaymentProof = useCallback(async (orderId, reference, note = "") => {
+    setActionError("");
+    try {
+      const response = await api.post(
+        `/payments/${encodeURIComponent(orderId)}/submit-proof`,
+        { reference, note },
+      );
+      upsertOrder(response.data.order);
+      return { ok: true };
+    } catch (requestError) {
+      const message =
+        requestError.normalizedMessage || "Unable to submit payment proof";
+      setActionError(message);
+      return { ok: false, message };
+    }
+  }, [api, upsertOrder]);
+
+  const reviewPayment = useCallback(async (orderId, action, note = "") => {
+    setActionError("");
+    try {
+      const body = action === "reject" ? { reason: note } : { note };
+      const response = await api.post(
+        `/payments/${encodeURIComponent(orderId)}/${action}`,
+        body,
+      );
+      upsertOrder(response.data.order);
+      return { ok: true };
+    } catch (requestError) {
+      const message =
+        requestError.normalizedMessage || "Unable to update payment";
+      setActionError(message);
+      return { ok: false, message };
+    }
+  }, [api, upsertOrder]);
+
+  useEffect(() => {
+    if (!ready || !allowed || !auth?.username || !auth?.token) return undefined;
+
+    let closedByEffect = false;
+
+    const connect = () => {
+      setLiveStatus("connecting");
+      const socket = new WebSocket(
+        buildWsUrl(
+          `/ws/${encodeURIComponent(auth.username)}?role=admin`,
+          auth.token,
+        ),
+      );
+      wsRef.current = socket;
+
+      socket.onopen = () => {
+        setLiveStatus("connected");
+        pingRef.current = setInterval(() => {
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: "ping" }));
+          }
+        }, 30000);
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.type === "order_created" || payload.type === "order_updated") {
+            upsertOrder(payload.order);
+            setLastLiveAt(payload.timestamp || new Date().toISOString());
+
+            if (
+              payload.type === "order_created" &&
+              typeof window !== "undefined" &&
+              "Notification" in window &&
+              window.Notification.permission === "granted"
+            ) {
+              new window.Notification("New order", {
+                body: `Table ${payload.order?.table_number || "-"}: ${payload.order?.id || ""}`,
+              });
+            }
+          }
+        } catch {
+          // ignore malformed websocket payloads
+        }
+      };
+
+      socket.onerror = () => {
+        setLiveStatus("disconnected");
+      };
+
+      socket.onclose = () => {
+        if (pingRef.current) clearInterval(pingRef.current);
+        setLiveStatus("disconnected");
+        if (!closedByEffect) {
+          retryRef.current = setTimeout(connect, 3000);
+        }
+      };
+    };
+
+    connect();
+
+    return () => {
+      closedByEffect = true;
+      if (retryRef.current) clearTimeout(retryRef.current);
+      if (pingRef.current) clearInterval(pingRef.current);
+      if (wsRef.current) wsRef.current.close();
+    };
+  }, [allowed, auth?.token, auth?.username, ready, upsertOrder]);
 
   if (!ready || (auth?.token && !allowed)) {
     return (
@@ -96,5 +240,16 @@ export default function OrdersPage() {
     );
   }
 
-  return <OrdersView orders={orders} />;
+  return (
+    <OrdersView
+      orders={orders}
+      liveStatus={liveStatus}
+      lastLiveAt={lastLiveAt}
+      actionError={actionError}
+      onRefresh={fetchOrders}
+      onUpdateStatus={updateOrderStatus}
+      onSubmitPaymentProof={submitPaymentProof}
+      onReviewPayment={reviewPayment}
+    />
+  );
 }

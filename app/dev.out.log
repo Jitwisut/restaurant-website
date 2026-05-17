@@ -1,0 +1,39 @@
+✅ DB Connected
+Elysia is running at 0.0.0.0:4000
+[WS IN] user=session:79a47950-c164-4ffd-abc2-8dfc3a03eaa8 role=user typeof=object raw={"type":"order","table_number":1,"session":"79a47950-c164-4ffd-abc2-8dfc3a03eaa8","menu":{"items":[{"id":4,"name":"ก๋วยเตี๋ยว","price":59,"qty":1}]}}
+[WS IN] user=kitchen role=kitchen typeof=object raw={"type":"order_status","to":"session:79a47950-c164-4ffd-abc2-8dfc3a03eaa8","order_id":"ORD-20260518-001","status":"preparing"}
+[WS IN] user=kitchen role=kitchen typeof=object raw={"type":"order_status","to":"session:79a47950-c164-4ffd-abc2-8dfc3a03eaa8","order_id":"ORD-20260518-001","status":"done"}
+[WS IN] user=admin role=admin typeof=object raw={"type":"ping"}
+✅ DB Connected
+Elysia is running at 0.0.0.0:4000
+[WS IN] user=session:a8fdc88f-fd9f-4257-affa-850e325f992c role=user typeof=object raw={"type":"order","table_number":1,"session":"a8fdc88f-fd9f-4257-affa-850e325f992c","menu":{"items":[{"id":4,"name":"ก๋วยเตี๋ยว","price":59,"qty":1}]}}
+[WS IN] user=kitchen role=kitchen typeof=object raw={"type":"order_status","to":"session:79a47950-c164-4ffd-abc2-8dfc3a03eaa8","order_id":"ORD-20260518-001","status":"done"}
+[WS IN] user=session:a8fdc88f-fd9f-4257-affa-850e325f992c role=user typeof=object raw={"type":"order","table_number":1,"session":"a8fdc88f-fd9f-4257-affa-850e325f992c","menu":{"items":[{"id":4,"name":"ก๋วยเตี๋ยว","price":59,"qty":1}]}}
+[WS IN] user=kitchen role=kitchen typeof=object raw={"type":"order_status","to":"session:a8fdc88f-fd9f-4257-affa-850e325f992c","order_id":"ORD-20260518-002","status":"preparing"}
+[WS IN] user=kitchen role=kitchen typeof=object raw={"type":"order_status","to":"session:a8fdc88f-fd9f-4257-affa-850e325f992c","order_id":"ORD-20260518-002","status":"done"}
+[WS IN] user=kitchen role=kitchen typeof=object raw={"type":"ping"}
+[WS IN] user=kitchen role=kitchen typeof=object raw={"type":"ping"}
+[WS IN] user=kitchen role=kitchen typeof=object raw={"type":"ping"}
+[WS IN] user=kitchen role=kitchen typeof=object raw={"type":"ping"}
+[WS IN] user=kitchen role=kitchen typeof=object raw={"type":"ping"}
+[WS IN] user=kitchen role=kitchen typeof=object raw={"type":"ping"}
+✅ DB Connected
+Elysia is running at 0.0.0.0:4000
+✅ DB Connected
+Elysia is running at 0.0.0.0:4000
+✅ DB Connected
+Elysia is running at 0.0.0.0:4000
+✅ DB Connected
+Elysia is running at 0.0.0.0:4000
+✅ DB Connected
+Elysia is running at 0.0.0.0:4000
+✅ DB Connected
+Elysia is running at 0.0.0.0:4000
+✅ DB Connected
+Elysia is running at 0.0.0.0:4000
+✅ DB Connected
+Elysia is running at 0.0.0.0:4000
+✅ DB Connected
+Elysia is running at 0.0.0.0:4000
+✅ DB Connected
+Elysia is running at 0.0.0.0:4000

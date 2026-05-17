@@ -31,15 +31,6 @@ function isAllowedOrigin(origin: string | null) {
   return origin === url || origin === url2;
 }
 
-function applyCorsHeaders(request: Request, set: any) {
-  const origin = request.headers.get("origin");
-  if (!isAllowedOrigin(origin)) return;
-
-  set.headers["Access-Control-Allow-Origin"] = origin;
-  set.headers["Access-Control-Allow-Credentials"] = "true";
-  set.headers["Vary"] = "Origin";
-}
-
 app
   .use(
     cors({
@@ -49,12 +40,10 @@ app
       allowedHeaders: ["Content-Type", "Authorization", "X-XSRF-TOKEN"],
     }),
   )
-  .onAfterHandle(({ request, set }) => {
-    applyCorsHeaders(request, set);
+  .onAfterHandle(({ set }) => {
     set.headers["Content-Security-Policy"] = csp;
   })
-  .onError(({ code, error, request, set }) => {
-    applyCorsHeaders(request, set);
+  .onError(({ code, error, set }) => {
     set.headers["Content-Security-Policy"] = csp;
 
     if (code === "VALIDATION") {

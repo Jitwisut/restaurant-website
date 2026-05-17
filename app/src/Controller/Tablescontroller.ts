@@ -4,6 +4,7 @@ import { getDB } from "../lib/connect";
 import { randomUUID } from "crypto";
 import { requireRole } from "../middleware/restaurantScope";
 import { notifyTableClosed } from "../router/websocket";
+import { buildBillPaymentQr } from "../lib/paymentQr";
 import {
   buildGuestSessionUsername,
   findActiveSessionByHash,
@@ -89,6 +90,161 @@ async function markSessionOrdersPaid(
         AND o.restaurant_id = $1`,
     [restaurantId, sessionId, serviceChargeRate, taxRate],
   );
+}
+
+async function buildSessionBill(
+  restaurantId: string | number,
+  sessionId: string,
+) {
+  const settingsPayload = await getRestaurantSettings(Number(restaurantId));
+  const orderSettings = settingsPayload?.settings?.order_settings || {};
+  const sessionResult = await db.query(
+    `SELECT
+       s.session_id,
+       s.table_number,
+       s.opened_at,
+       s.closed_at
+     FROM sessions s
+    WHERE s.restaurant_id = $1
+      AND s.session_id::text = $2
+    LIMIT 1`,
+    [restaurantId, sessionId],
+  );
+
+  if (sessionResult.rowCount === 0) return null;
+
+  const ordersResult = await db.query(
+    `SELECT
+       o.id,
+       o.status,
+       o.payment_status,
+       o.created_at,
+       COALESCE(o.subtotal, 0) AS subtotal,
+       COALESCE(o.discount_amount, 0) AS discount_amount,
+       COALESCE(o.service_charge_amount, 0) AS service_charge_amount,
+       COALESCE(o.tax_amount, 0) AS tax_amount,
+       COALESCE(o.grand_total, 0) AS grand_total,
+       COALESCE(
+         json_agg(
+           json_build_object(
+             'order_id', o.id,
+             'menu_item_name', oi.menu_item_name,
+             'quantity', oi.quantity,
+             'price', oi.price,
+             'subtotal', oi.quantity * oi.price::numeric,
+             'notes', oi.notes
+           ) ORDER BY oi.id
+         ) FILTER (WHERE oi.id IS NOT NULL),
+         '[]'
+       ) AS items
+     FROM orders o
+     LEFT JOIN order_items oi
+       ON oi.order_id = o.id
+      AND oi.restaurant_id = o.restaurant_id
+    WHERE o.restaurant_id = $1
+      AND o.customer_session::text = $2
+    GROUP BY o.id, o.status, o.payment_status, o.created_at,
+             o.subtotal, o.discount_amount, o.service_charge_amount,
+             o.tax_amount, o.grand_total
+    ORDER BY o.created_at ASC`,
+    [restaurantId, sessionId],
+  );
+
+  const orders = ordersResult.rows || [];
+  const items = orders.flatMap((order: any) =>
+    Array.isArray(order.items) ? order.items : [],
+  );
+  const itemSubtotal = items.reduce(
+    (sum: number, item: any) => sum + Number(item.subtotal || 0),
+    0,
+  );
+  const subtotal = orders.reduce(
+    (sum: number, order: any) =>
+      sum + Number(order.subtotal || 0),
+    0,
+  ) || itemSubtotal;
+  const serviceChargeAmount = orders.reduce(
+    (sum: number, order: any) =>
+      sum + Number(order.service_charge_amount || 0),
+    0,
+  );
+  const taxAmount = orders.reduce(
+    (sum: number, order: any) => sum + Number(order.tax_amount || 0),
+    0,
+  );
+  const discountAmount = orders.reduce(
+    (sum: number, order: any) =>
+      sum + Number(order.discount_amount || 0),
+    0,
+  );
+  const grandTotal = orders.reduce(
+    (sum: number, order: any) => sum + Number(order.grand_total || 0),
+    0,
+  ) || Math.max(subtotal + serviceChargeAmount + taxAmount - discountAmount, 0);
+  const payment = await buildBillPaymentQr(orderSettings, grandTotal);
+  const paymentStatuses = Array.from(
+    new Set(orders.map((order: any) => order.payment_status || "unpaid")),
+  );
+
+  return {
+    session: sessionResult.rows[0],
+    orders,
+    items,
+    totals: {
+      subtotal,
+      service_charge_amount: serviceChargeAmount,
+      tax_amount: taxAmount,
+      discount_amount: discountAmount,
+      grand_total: grandTotal,
+    },
+    payment,
+    payment_status:
+      paymentStatuses.length === 1 ? paymentStatuses[0] : "mixed",
+  };
+}
+
+async function buildSessionOrderHistory(
+  restaurantId: string | number,
+  sessionId: string,
+) {
+  const result = await db.query(
+    `SELECT
+       o.id,
+       o.table_number,
+       o.status,
+       o.payment_status,
+       o.created_at,
+       COALESCE(o.subtotal, 0) AS subtotal,
+       COALESCE(o.discount_amount, 0) AS discount_amount,
+       COALESCE(o.service_charge_amount, 0) AS service_charge_amount,
+       COALESCE(o.tax_amount, 0) AS tax_amount,
+       COALESCE(NULLIF(o.grand_total, 0), SUM(oi.quantity * oi.price::numeric), 0) AS total,
+       COALESCE(
+         json_agg(
+           json_build_object(
+             'menu_item_name', oi.menu_item_name,
+             'quantity', oi.quantity,
+             'price', oi.price,
+             'subtotal', oi.quantity * oi.price::numeric,
+             'notes', oi.notes
+           ) ORDER BY oi.id
+         ) FILTER (WHERE oi.id IS NOT NULL),
+         '[]'
+       ) AS items
+     FROM orders o
+     LEFT JOIN order_items oi
+       ON oi.order_id = o.id
+      AND oi.restaurant_id = o.restaurant_id
+    WHERE o.restaurant_id = $1
+      AND o.customer_session::text = $2
+    GROUP BY o.id, o.table_number, o.status, o.payment_status, o.created_at,
+             o.subtotal, o.discount_amount, o.service_charge_amount,
+             o.tax_amount, o.grand_total
+    ORDER BY o.created_at DESC`,
+    [restaurantId, sessionId],
+  );
+
+  return result.rows || [];
 }
 
 export const Tablecontroller = {
@@ -296,11 +452,18 @@ export const Tablecontroller = {
         }
       }
 
+      let bill = null;
       if (closedSessionId) {
         await markSessionOrdersPaid(scope.restaurantId, String(closedSessionId));
+        bill = await buildSessionBill(scope.restaurantId, String(closedSessionId));
       }
 
-      return { message: "Close table success", table_number: tableNumber };
+      return {
+        message: "Close table success",
+        table_number: tableNumber,
+        session_id: closedSessionId,
+        bill,
+      };
     } catch (err) {
       console.error("closetable error:", (err as Error).message);
       set.status = 500;
@@ -443,6 +606,97 @@ export const Tablecontroller = {
 
     await markSessionOrdersPaid(scope.restaurantId, String(sessionId));
     return { message: "success" };
+  },
+
+  sessionBill: async (
+    context: Context & {
+      params: { session: string };
+      jwt?: any;
+    },
+  ) => {
+    const { set, params } = context;
+    const scope = await requireRole(context, [
+      "admin",
+      "owner",
+      "staff",
+      "superadmin",
+    ]);
+    if (!scope.ok) return scope.response;
+
+    const bill = await buildSessionBill(scope.restaurantId, params.session);
+    if (!bill) {
+      set.status = 404;
+      return { message: "Bill not found" };
+    }
+
+    return { bill };
+  },
+
+  sessionOrders: async (
+    context: Context & {
+      params: { session: string };
+      jwt?: any;
+    },
+  ) => {
+    const { set, params } = context;
+    const scope = await requireRole(context, [
+      "user",
+      "admin",
+      "owner",
+      "staff",
+      "superadmin",
+    ]);
+    if (!scope.ok) return scope.response;
+
+    const tokenSessionId = (scope.payload as any)?.session_id;
+    if (scope.payload?.role === "user" && tokenSessionId !== params.session) {
+      set.status = 403;
+      return { message: "Forbidden: Invalid table session" };
+    }
+
+    const orders = await buildSessionOrderHistory(
+      scope.restaurantId,
+      params.session,
+    );
+
+    return { orders };
+  },
+
+  publicSessionBill: async (
+    context: Context & {
+      params: { session: string };
+    },
+  ) => {
+    const { set, params } = context;
+    const sessionResult = await db.query(
+      `SELECT s.restaurant_id, r.status AS restaurant_status
+         FROM sessions s
+         LEFT JOIN restaurants r ON r.id = s.restaurant_id
+        WHERE s.session_id::text = $1
+        LIMIT 1`,
+      [params.session],
+    );
+
+    if (sessionResult.rowCount === 0) {
+      set.status = 404;
+      return { message: "Bill not found" };
+    }
+
+    if (sessionResult.rows[0].restaurant_status !== "active") {
+      set.status = 403;
+      return { message: "Restaurant is suspended" };
+    }
+
+    const bill = await buildSessionBill(
+      sessionResult.rows[0].restaurant_id,
+      params.session,
+    );
+    if (!bill) {
+      set.status = 404;
+      return { message: "Bill not found" };
+    }
+
+    return { bill };
   },
 
   addtable: async (context: Context & { jwt?: any }) => {

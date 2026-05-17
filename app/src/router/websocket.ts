@@ -38,7 +38,7 @@ type MsgOrderStatus = {
   type: "order_status";
   to: string;
   order_id: string;
-  status: "accepted" | "preparing" | "done" | "rejected";
+  status: "accepted" | "preparing" | "done" | "ready" | "rejected";
 };
 type MsgCallStaff = {
   type: "call_staff";
@@ -246,10 +246,78 @@ async function saveOrderToDb(order: {
     }
 
     await db.query("COMMIT");
+    return true;
   } catch (err) {
     await db.query("ROLLBACK");
     console.error("Error saving order:", (err as Error).message);
+    return false;
   }
+}
+
+async function getOrderSnapshot(restaurantId: string, orderId: string) {
+  const result = await db.query(
+    `SELECT
+      o.table_number,
+      o.id,
+      o.status,
+      o.created_at,
+      s.session_id,
+      s.opened_at,
+      s.closed_at,
+      COALESCE(
+        json_agg(
+          json_build_object(
+            'menu_item_name', oi.menu_item_name,
+            'quantity', oi.quantity,
+            'price', oi.price
+          ) ORDER BY oi.id
+        ) FILTER (WHERE oi.id IS NOT NULL),
+        '[]'
+      ) as items,
+      COALESCE(SUM(oi.quantity * oi.price::numeric), 0) as total
+    FROM orders o
+    LEFT JOIN sessions s
+      ON o.customer_session = s.session_id
+     AND s.restaurant_id = o.restaurant_id
+    LEFT JOIN order_items oi
+      ON o.id = oi.order_id
+     AND oi.restaurant_id = o.restaurant_id
+    WHERE o.restaurant_id = $1
+      AND o.id = $2
+    GROUP BY o.table_number, o.id, o.status, o.created_at,
+             s.session_id, s.opened_at, s.closed_at
+    LIMIT 1`,
+    [restaurantId, orderId],
+  );
+
+  return result.rows?.[0] || null;
+}
+
+async function updateOrderStatus(
+  restaurantId: string,
+  orderId: string,
+  status: MsgOrderStatus["status"],
+) {
+  const normalizedStatus = status === "done" ? "ready" : status;
+  const result = await db.query(
+    `UPDATE orders
+        SET status = $3,
+            updated_at = NOW()
+      WHERE restaurant_id = $1
+        AND id = $2
+      RETURNING id`,
+    [restaurantId, orderId, normalizedStatus],
+  );
+
+  if (result.rowCount === 0) return null;
+  return getOrderSnapshot(restaurantId, orderId);
+}
+
+export function notifyAdmins(restaurantId: string | number, payload: any) {
+  const restSockets = getRestaurantSockets(String(restaurantId));
+  Array.from(restSockets.admin.values()).forEach((adminWs) => {
+    sendJSON(adminWs, payload);
+  });
 }
 
 function safeParse(
@@ -314,7 +382,7 @@ function ensureOrderStatus(x: any): x is MsgOrderStatus {
   return (
     typeof x?.to === "string" &&
     typeof x?.order_id === "string" &&
-    ["accepted", "preparing", "done", "rejected"].includes(x?.status)
+    ["accepted", "preparing", "done", "ready", "rejected"].includes(x?.status)
   );
 }
 
@@ -642,6 +710,22 @@ async function routeMessage(
       }
 
       const orderId = await generateOrderId(sender.restaurant_id);
+      const saved = await saveOrderToDb({
+        id: orderId,
+        menu: msg.menu,
+        session: msg.session,
+        table_number: tableNumber,
+        restaurant_id: sender.restaurant_id,
+      });
+      if (!saved) {
+        sendJSON(ws, {
+          type: "error",
+          message: "Unable to save order. Please try again.",
+        });
+        return;
+      }
+
+      const orderSnapshot = await getOrderSnapshot(sender.restaurant_id, orderId);
       kitchenClients.forEach((kitchenWs) => {
         sendJSON(kitchenWs, {
           type: "order",
@@ -649,18 +733,18 @@ async function routeMessage(
           from: username,
           menu: msg.menu,
           session: msg.session,
+          status: orderSnapshot?.status || "pending",
           table_number: msg.table_number,
-          timestamp: new Date().toISOString(),
+          timestamp: orderSnapshot?.created_at || new Date().toISOString(),
         });
       });
-
-      await saveOrderToDb({
-        id: orderId,
-        menu: msg.menu,
-        session: msg.session,
-        table_number: tableNumber,
-        restaurant_id: sender.restaurant_id,
-      });
+      if (orderSnapshot) {
+        notifyAdmins(sender.restaurant_id, {
+          type: "order_created",
+          order: orderSnapshot,
+          timestamp: new Date().toISOString(),
+        });
+      }
 
       sendJSON(ws, {
         type: "system",
@@ -671,11 +755,43 @@ async function routeMessage(
     }
 
     case "order_status": {
+      if (sender.role !== "kitchen" && sender.role !== "admin") {
+        sendJSON(ws, {
+          type: "error",
+          message: "Only kitchen or admin clients can update order status",
+        });
+        return;
+      }
+
       if (!ensureOrderStatus(msg)) {
         sendJSON(ws, {
           type: "error",
           message:
-            "order_status ต้องมี to, order_id และ status (accepted|preparing|done|rejected)",
+            "order_status ต้องมี to, order_id และ status (accepted|preparing|done|ready|rejected)",
+        });
+        return;
+      }
+
+      let orderSnapshot = null;
+      try {
+        orderSnapshot = await updateOrderStatus(
+          sender.restaurant_id,
+          msg.order_id,
+          msg.status,
+        );
+      } catch (err) {
+        console.error("order_status update error:", (err as Error).message);
+        sendJSON(ws, {
+          type: "error",
+          message: "Unable to update order status. Please try again.",
+        });
+        return;
+      }
+
+      if (!orderSnapshot) {
+        sendJSON(ws, {
+          type: "error",
+          message: "Order was not found for this restaurant",
         });
         return;
       }
@@ -683,19 +799,29 @@ async function routeMessage(
       const recipient = getClient(sender.restaurant_id, msg.to);
       if (!recipient || recipient.restaurant_id !== sender.restaurant_id) {
         sendJSON(ws, {
-          type: "error",
-          message: `ไม่พบผู้ใช้ ${msg.to} หรือไม่ได้เชื่อมต่อ`,
+          type: "system",
+          message: `Order status saved, but ${msg.to} is not connected`,
         });
-        return;
+      } else {
+        sendJSON(recipient.ws, {
+          type: "order_status",
+          from: username,
+          order_id: msg.order_id,
+          status: msg.status,
+          timestamp: new Date().toISOString(),
+        });
       }
 
-      sendJSON(recipient.ws, {
-        type: "order_status",
-        from: username,
-        order_id: msg.order_id,
-        status: msg.status,
-        timestamp: new Date().toISOString(),
-      });
+      if (orderSnapshot) {
+        notifyAdmins(sender.restaurant_id, {
+          type: "order_updated",
+          order: orderSnapshot,
+          order_id: msg.order_id,
+          status: orderSnapshot.status,
+          kitchen_status: msg.status,
+          timestamp: new Date().toISOString(),
+        });
+      }
       return;
     }
 

@@ -133,10 +133,62 @@ export async function ensureSalesSchema() {
           ADD COLUMN IF NOT EXISTS tax_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
           ADD COLUMN IF NOT EXISTS grand_total NUMERIC(12, 2) NOT NULL DEFAULT 0,
           ADD COLUMN IF NOT EXISTS payment_status VARCHAR(30) NOT NULL DEFAULT 'unpaid',
+          ADD COLUMN IF NOT EXISTS payment_reference TEXT,
+          ADD COLUMN IF NOT EXISTS payment_review_note TEXT,
+          ADD COLUMN IF NOT EXISTS payment_submitted_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS payment_reviewed_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS payment_reviewed_by INTEGER,
           ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP,
           ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP,
           ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMP,
-          ADD COLUMN IF NOT EXISTS voided_at TIMESTAMP
+          ADD COLUMN IF NOT EXISTS voided_at TIMESTAMP,
+          ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP
+      `);
+
+      await db.query(`
+        UPDATE orders
+           SET status = 'ready'
+         WHERE status = 'done'
+      `);
+
+      await db.query(`
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1
+              FROM pg_constraint
+             WHERE conname = 'status_check'
+               AND conrelid = 'orders'::regclass
+          ) THEN
+            ALTER TABLE orders DROP CONSTRAINT status_check;
+          END IF;
+
+          IF NOT EXISTS (
+            SELECT 1
+              FROM pg_constraint
+             WHERE conname = 'orders_status_check'
+               AND conrelid = 'orders'::regclass
+          ) THEN
+            ALTER TABLE orders
+              ADD CONSTRAINT orders_status_check
+              CHECK (
+                status IN (
+                  'pending',
+                  'accepted',
+                  'preparing',
+                  'ready',
+                  'completed',
+                  'cancelled',
+                  'rejected'
+                )
+              );
+          END IF;
+        END $$;
+      `);
+
+      await db.query(`
+        ALTER TABLE order_items
+          ADD COLUMN IF NOT EXISTS notes TEXT
       `);
 
       await db.query(`

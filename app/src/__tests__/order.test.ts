@@ -7,6 +7,7 @@ import { getTestDB } from "./setup";
 import {
   authHeaders,
   createAvailableTable,
+  createOpenTable,
   ensureTestRestaurant,
   OTHER_RESTAURANT_ID,
   TEST_JWT_SECRET,
@@ -99,5 +100,74 @@ describe("Order Controller - Order History", () => {
     expect(response.status).toBe(200);
     const data = await response.json();
     expect(data.order.some((order: any) => order.id === otherOrderId)).toBe(false);
+  });
+
+  test("active kitchen queue excludes orders already marked ready", async () => {
+    const app = createTestApp();
+    const sessionId = await createOpenTable(13, TEST_RESTAURANT_ID);
+    const pendingOrderId = `ORD-ACTIVE-PENDING-${Date.now()}`;
+    const readyOrderId = `ORD-ACTIVE-READY-${Date.now()}`;
+
+    await db.query(
+      `INSERT INTO orders (id, table_number, customer_session, status, restaurant_id)
+       VALUES
+         ($1, 13, $3, 'preparing', $4),
+         ($2, 13, $3, 'ready', $4)`,
+      [pendingOrderId, readyOrderId, sessionId, TEST_RESTAURANT_ID],
+    );
+
+    const response = await app.handle(
+      new Request("http://localhost/order/active", {
+        method: "GET",
+        headers: authHeaders({ role: "kitchen" }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    const ids = data.order.map((order: any) => order.id);
+    expect(ids).toContain(pendingOrderId);
+    expect(ids).not.toContain(readyOrderId);
+  });
+
+  test("active kitchen queue excludes stale orders from closed table sessions", async () => {
+    const app = createTestApp();
+    const sessionId = randomUUID();
+    const staleOrderId = `ORD-ACTIVE-STALE-${Date.now()}`;
+
+    await createAvailableTable(14, TEST_RESTAURANT_ID);
+    await db.query(
+      `UPDATE tables
+          SET status = 'available',
+              customer_session = NULL,
+              opened_at = NULL
+        WHERE table_number = $1
+          AND restaurant_id = $2`,
+      [14, TEST_RESTAURANT_ID],
+    );
+    await db.query(
+      `INSERT INTO sessions (session_id, table_number, opened_at, closed_at, restaurant_id)
+       VALUES ($1, $2, NOW() - INTERVAL '1 hour', NOW(), $3)
+       ON CONFLICT DO NOTHING`,
+      [sessionId, 14, TEST_RESTAURANT_ID],
+    );
+    await db.query(
+      `INSERT INTO orders (id, table_number, customer_session, status, restaurant_id)
+       VALUES ($1, 14, $2, 'preparing', $3)`,
+      [staleOrderId, sessionId, TEST_RESTAURANT_ID],
+    );
+
+    const response = await app.handle(
+      new Request("http://localhost/order/active", {
+        method: "GET",
+        headers: authHeaders({ role: "kitchen" }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.order.some((order: any) => order.id === staleOrderId)).toBe(
+      false,
+    );
   });
 });

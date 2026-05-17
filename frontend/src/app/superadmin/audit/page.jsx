@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Swal from "sweetalert2";
 import { createApiClient } from "@/lib/api";
@@ -50,7 +50,7 @@ function SuperadminAuditContent() {
 
   const restaurantId = searchParams.get("restaurant_id") || "";
 
-  const load = async (page = pagination.page) => {
+  const load = useCallback(async (page = pagination.page) => {
     if (!auth?.token || auth?.role !== "superadmin") return;
     setLoading(true);
     try {
@@ -64,7 +64,7 @@ function SuperadminAuditContent() {
 
       const response = await api.get(`/superadmin/audit?${params.toString()}`);
       setEntries(response.data.items || []);
-      setPagination(response.data.pagination || pagination);
+      setPagination((current) => response.data.pagination || current);
     } catch (error) {
       Swal.fire({
         icon: "error",
@@ -74,7 +74,16 @@ function SuperadminAuditContent() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [
+    action,
+    actor,
+    api,
+    auth?.role,
+    auth?.token,
+    pagination.page,
+    pagination.pageSize,
+    restaurantId,
+  ]);
 
   useEffect(() => {
     if (!ready) return;
@@ -87,7 +96,7 @@ function SuperadminAuditContent() {
       return;
     }
     load(1);
-  }, [auth, ready, router, restaurantId]);
+  }, [auth, load, ready, router]);
 
   if (!ready || loading) {
     return (

@@ -3,6 +3,7 @@ import { Elysia } from "elysia";
 import jwt from "@elysiajs/jwt";
 import { Tablerouter } from "../router/Tablerouter";
 import { getTestDB } from "./setup";
+import { buildPromptPayPayload } from "../lib/paymentQr";
 import {
   authHeaders,
   createAvailableTable,
@@ -181,6 +182,80 @@ describe("Table Controller - Open and close", () => {
     expect(data.message).toContain("Close table success");
     expect(data.table_number).toBe(tableNumber);
   });
+
+  test("returns a table bill with a PromptPay QR for the closed session total", async () => {
+    const app = createTestApp();
+    const tableNumber = 40;
+    const sessionId = await createOpenTable(tableNumber);
+    const orderId = `bill-qr-${Date.now()}`;
+
+    await db.query(
+      `INSERT INTO restaurant_settings (restaurant_id, order_settings)
+       VALUES ($1, $2::jsonb)
+       ON CONFLICT (restaurant_id) DO UPDATE
+       SET order_settings = EXCLUDED.order_settings`,
+      [
+        TEST_RESTAURANT_ID,
+        JSON.stringify({
+          serviceChargePercent: 10,
+          taxPercent: 7,
+          promptPayId: "0812345678",
+          promptPayType: "phone",
+          promptPayAccountName: "Test Restaurant",
+          paymentMethods: {
+            cash: true,
+            bankTransfer: true,
+            qrPromptPay: true,
+          },
+        }),
+      ],
+    );
+    await db.query(
+      `INSERT INTO orders (id, table_number, customer_session, status, restaurant_id)
+       VALUES ($1, $2, $3, 'pending', $4)`,
+      [orderId, tableNumber, sessionId, TEST_RESTAURANT_ID],
+    );
+    await db.query(
+      `INSERT INTO order_items (order_id, menu_item_name, quantity, price, restaurant_id)
+       VALUES ($1, 'Noodle', 2, 100, $2), ($1, 'Tea', 1, 50, $2)`,
+      [orderId, TEST_RESTAURANT_ID],
+    );
+
+    const response = await app.handle(
+      new Request("http://localhost/tables/closetable", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ number: tableNumber }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.bill.session.session_id).toBe(sessionId);
+    expect(Number(data.bill.totals.subtotal)).toBe(250);
+    expect(Number(data.bill.totals.service_charge_amount)).toBe(25);
+    expect(Number(data.bill.totals.tax_amount)).toBe(19.25);
+    expect(Number(data.bill.totals.grand_total)).toBe(294.25);
+    expect(data.bill.payment.amount).toBe(294.25);
+    expect(data.bill.payment.method).toBe("promptpay");
+    expect(data.bill.payment.promptpay.qr_data_url).toMatch(
+      /^data:image\/png;base64,/,
+    );
+  });
+
+  test("generates a scannable PromptPay payload with fixed bill amount", () => {
+    const payload = buildPromptPayPayload(
+      {
+        promptPayType: "phone",
+        promptPayId: "0812345678",
+      },
+      294.25,
+    );
+
+    expect(payload).toBe(
+      "00020101021229370016A000000677010111011300668123456785802TH53037645406294.2563046FE3",
+    );
+  });
 });
 
 describe("Table Controller - Session and add table", () => {
@@ -224,6 +299,46 @@ describe("Table Controller - Session and add table", () => {
     expect(payload.session_id).toBe(session);
     expect(Number(payload.table_number)).toBe(tableNumber);
     expect(Number(payload.restaurant_id)).toBe(TEST_RESTAURANT_ID);
+  });
+
+  test("returns order history for the active guest session only", async () => {
+    const app = createTestApp();
+    const tableNumber = 41;
+    const session = await createOpenTable(tableNumber);
+    const orderId = `guest-history-${Date.now()}`;
+
+    await db.query(
+      `INSERT INTO orders (id, table_number, customer_session, status, restaurant_id)
+       VALUES ($1, $2, $3, 'preparing', $4)`,
+      [orderId, tableNumber, session, TEST_RESTAURANT_ID],
+    );
+    await db.query(
+      `INSERT INTO order_items (order_id, menu_item_name, quantity, price, restaurant_id)
+       VALUES ($1, 'Pad Thai', 2, 80, $2), ($1, 'Iced Tea', 1, 35, $2)`,
+      [orderId, TEST_RESTAURANT_ID],
+    );
+
+    const tokenResponse = await app.handle(
+      new Request(`http://localhost/tables/session/${session}/guest-token`, {
+        method: "POST",
+      }),
+    );
+    const tokenPayload = await tokenResponse.json();
+    const response = await app.handle(
+      new Request(`http://localhost/tables/session/${session}/orders`, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${tokenPayload.token}`,
+        },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.orders).toHaveLength(1);
+    expect(data.orders[0].id).toBe(orderId);
+    expect(data.orders[0].items).toHaveLength(2);
+    expect(Number(data.orders[0].total)).toBe(195);
   });
 
   test("returns public menu only for the active table session restaurant", async () => {

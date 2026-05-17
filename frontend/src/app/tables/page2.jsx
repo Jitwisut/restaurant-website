@@ -1,5 +1,6 @@
 "use client";
-import { useState, useEffect } from "react";
+import Image from "next/image";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import axios from "axios";
 
@@ -158,8 +159,12 @@ export default function TableManagement() {
   const [filter, setFilter] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
 
+  const showToast = useCallback((message, type) => {
+    setToast({ message, type });
+  }, []);
+
   /* ---------- fetch tables ---------- */
-  const fetchTables = async () => {
+  const fetchTables = useCallback(async () => {
     try {
       setIsLoading(true);
       const { data } = await axios.get(`${API_BASE}/tables/gettable`, {
@@ -175,11 +180,11 @@ export default function TableManagement() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [showToast]);
 
   useEffect(() => {
     fetchTables();
-  }, []);
+  }, [fetchTables]);
 
   /* ---------- filter and search ---------- */
   useEffect(() => {
@@ -226,10 +231,6 @@ export default function TableManagement() {
     }[s] || "ไม่ทราบ");
 
   const countBy = (s) => tables.filter((t) => t.status === s).length;
-
-  const showToast = (message, type) => {
-    setToast({ message, type });
-  };
 
   /* ---------- actions ---------- */
   const openTable = async (number) => {
@@ -369,9 +370,12 @@ export default function TableManagement() {
             <p className="text-gray-600 mb-6">ให้ลูกค้าสแกน QR Code ด้านล่าง</p>
 
             <div className="bg-gradient-to-r from-blue-50 to-purple-50 p-6 rounded-2xl mb-6">
-              <img
+              <Image
                 src={qr64}
                 alt="QR Code"
+                width={192}
+                height={192}
+                unoptimized
                 className="w-48 h-48 mx-auto rounded-xl shadow-lg bg-white p-2"
               />
               <p

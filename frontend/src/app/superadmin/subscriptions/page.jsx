@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Swal from "sweetalert2";
 import { createApiClient } from "@/lib/api";
@@ -37,7 +37,7 @@ export default function SuperadminSubscriptionsPage() {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!auth?.token || auth?.role !== "superadmin") return;
     setLoading(true);
     try {
@@ -52,7 +52,7 @@ export default function SuperadminSubscriptionsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [api, auth?.role, auth?.token]);
 
   useEffect(() => {
     if (!ready) return;
@@ -65,7 +65,7 @@ export default function SuperadminSubscriptionsPage() {
       return;
     }
     load();
-  }, [auth, ready, router]);
+  }, [auth, load, ready, router]);
 
   const runAction = async (restaurantId, action, body = {}) => {
     setBusyId(`${action}:${restaurantId}`);

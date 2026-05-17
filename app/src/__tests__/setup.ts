@@ -156,10 +156,16 @@ export async function setupTestDB() {
       tax_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
       grand_total NUMERIC(12, 2) NOT NULL DEFAULT 0,
       payment_status VARCHAR(30) NOT NULL DEFAULT 'unpaid',
+      payment_reference TEXT,
+      payment_review_note TEXT,
+      payment_submitted_at TIMESTAMP,
+      payment_reviewed_at TIMESTAMP,
+      payment_reviewed_by INTEGER,
       paid_at TIMESTAMP,
       completed_at TIMESTAMP,
       refunded_at TIMESTAMP,
       voided_at TIMESTAMP,
+      updated_at TIMESTAMP,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -172,10 +178,53 @@ export async function setupTestDB() {
       ADD COLUMN IF NOT EXISTS tax_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS grand_total NUMERIC(12, 2) NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS payment_status VARCHAR(30) NOT NULL DEFAULT 'unpaid',
+      ADD COLUMN IF NOT EXISTS payment_reference TEXT,
+      ADD COLUMN IF NOT EXISTS payment_review_note TEXT,
+      ADD COLUMN IF NOT EXISTS payment_submitted_at TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS payment_reviewed_at TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS payment_reviewed_by INTEGER,
       ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP,
       ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP,
       ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMP,
-      ADD COLUMN IF NOT EXISTS voided_at TIMESTAMP
+      ADD COLUMN IF NOT EXISTS voided_at TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP
+  `);
+
+  await db.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+          FROM pg_constraint
+         WHERE conname = 'status_check'
+           AND conrelid = 'orders'::regclass
+      ) THEN
+        ALTER TABLE orders DROP CONSTRAINT status_check;
+      END IF;
+
+      IF EXISTS (
+        SELECT 1
+          FROM pg_constraint
+         WHERE conname = 'orders_status_check'
+           AND conrelid = 'orders'::regclass
+      ) THEN
+        ALTER TABLE orders DROP CONSTRAINT orders_status_check;
+      END IF;
+
+      ALTER TABLE orders
+        ADD CONSTRAINT orders_status_check
+        CHECK (
+          status IN (
+            'pending',
+            'accepted',
+            'preparing',
+            'ready',
+            'completed',
+            'cancelled',
+            'rejected'
+          )
+        );
+    END $$;
   `);
 
   await db.query(`
@@ -189,6 +238,10 @@ export async function setupTestDB() {
       restaurant_id INTEGER NOT NULL REFERENCES restaurants(id),
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
+  `);
+  await db.query(`
+    ALTER TABLE order_items
+      ADD COLUMN IF NOT EXISTS notes TEXT
   `);
 
   await db.query(`

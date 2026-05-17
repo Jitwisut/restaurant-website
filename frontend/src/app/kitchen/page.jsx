@@ -1,25 +1,100 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { buildWsUrl } from "@/lib/api";
+import { buildWsUrl, createApiClient } from "@/lib/api";
 import { useRestaurantAccess } from "../components/useRestaurantAccess";
+
+const KITCHEN_QUEUE_STATUSES = new Set(["pending", "accepted", "preparing"]);
+
+function normalizeKitchenStatus(status) {
+  return status === "done" ? "ready" : status || "pending";
+}
+
+function isKitchenQueueStatus(status) {
+  return KITCHEN_QUEUE_STATUSES.has(normalizeKitchenStatus(status));
+}
+
+function formatOrderTime(value) {
+  const date = value ? new Date(value) : new Date();
+  return Number.isNaN(date.getTime())
+    ? new Date().toLocaleTimeString("th-TH")
+    : date.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" });
+}
+
+function normalizeKitchenItems(items = []) {
+  return items.map((item) => ({
+    name: item.menu_item_name || item.name || item.menu_name || "Menu item",
+    qty: Number(item.quantity || item.qty || 1),
+    price: item.price,
+    note: item.notes || item.note || "",
+  }));
+}
+
+function toKitchenQueueOrder(order) {
+  const status = normalizeKitchenStatus(order.status);
+  if (!isKitchenQueueStatus(status)) return null;
+  const sessionId = order.session_id || order.session;
+  if (!sessionId || order.closed_at) return null;
+  const timeValue = new Date(order.created_at || order.timestamp || Date.now()).getTime();
+
+  return {
+    orderId: order.id || order.order_id,
+    from: order.customer_username || order.from,
+    items: normalizeKitchenItems(order.items || order.menu?.items || []),
+    tableNumber: order.table_number,
+    status,
+    timestamp: formatOrderTime(order.created_at || order.timestamp),
+    timestampMs: Number.isNaN(timeValue) ? Date.now() : timeValue,
+    elapsed: "00:00",
+  };
+}
+
+function mergeQueue(current, incoming) {
+  const byId = new Map(current.map((order) => [order.orderId, order]));
+
+  incoming.forEach((order) => {
+    if (!order?.orderId || !isKitchenQueueStatus(order.status)) return;
+    byId.set(order.orderId, { ...byId.get(order.orderId), ...order });
+  });
+
+  return Array.from(byId.values())
+    .filter((order) => isKitchenQueueStatus(order.status))
+    .sort((a, b) => (a.timestampMs || 0) - (b.timestampMs || 0));
+}
 
 export default function KitchenDashboard() {
   const { auth, ready, allowed } = useRestaurantAccess([
     "kitchen",
     "superadmin",
   ]);
+  const api = useMemo(() => createApiClient(auth?.token), [auth?.token]);
   const wsRef = useRef(null);
   const pingRef = useRef(null);
   const retryRef = useRef(null);
+  const shouldReconnectRef = useRef(false);
   const [connected, setConnected] = useState(false);
   const [activeSince, setActiveSince] = useState(null);
   const [queue, setQueue] = useState([]);
   const [error, setError] = useState("");
 
+  const loadActiveOrders = useCallback(async () => {
+    if (!auth?.token) return;
+
+    try {
+      const response = await api.get("/order/active");
+      const activeOrders = response.data.order || [];
+      setQueue(activeOrders.map(toKitchenQueueOrder).filter(Boolean));
+    } catch (requestError) {
+      setError(
+        requestError.normalizedMessage || "Unable to load active kitchen orders",
+      );
+    }
+  }, [api, auth?.token]);
+
   const connect = useCallback(() => {
     if (!auth?.username || !auth?.token) return;
 
+    shouldReconnectRef.current = true;
     const socket = new WebSocket(
       buildWsUrl(`/ws/${encodeURIComponent(auth.username)}?role=kitchen`, auth.token),
     );
@@ -41,20 +116,8 @@ export default function KitchenDashboard() {
         const data = JSON.parse(event.data);
         if (data.type === "order") {
           setQueue((current) => {
-            const exists = current.some((item) => item.orderId === data.order_id);
-            if (exists) return current;
-            return [
-              ...current,
-              {
-                orderId: data.order_id,
-                from: data.from,
-                items: data.menu?.items || [],
-                tableNumber: data.table_number,
-                status: "pending",
-                timestamp: new Date().toLocaleTimeString("th-TH"),
-                elapsed: "00:00", // Would need a timer hook in a real app
-              },
-            ];
+            const nextOrder = toKitchenQueueOrder(data);
+            return nextOrder ? mergeQueue(current, [nextOrder]) : current;
           });
         }
       } catch {
@@ -67,21 +130,28 @@ export default function KitchenDashboard() {
       setConnected(false);
       setActiveSince(null);
       if (pingRef.current) clearInterval(pingRef.current);
-      retryRef.current = setTimeout(connect, 3000);
+      if (shouldReconnectRef.current) {
+        retryRef.current = setTimeout(connect, 3000);
+      }
     };
   }, [auth?.token, auth?.username]);
 
   useEffect(() => {
     if (ready && allowed) {
+      loadActiveOrders();
       connect();
     }
 
     return () => {
+      shouldReconnectRef.current = false;
       if (retryRef.current) clearTimeout(retryRef.current);
       if (pingRef.current) clearInterval(pingRef.current);
-      if (wsRef.current) wsRef.current.close();
+      if (wsRef.current) {
+        wsRef.current.onclose = null;
+        wsRef.current.close();
+      }
     };
-  }, [allowed, connect, ready]);
+  }, [allowed, connect, loadActiveOrders, ready]);
 
   const sendStatus = useCallback((orderId, status) => {
     const socket = wsRef.current;
@@ -101,7 +171,7 @@ export default function KitchenDashboard() {
     );
 
     setQueue((current) =>
-      status === "ready" || status === "done"
+      status === "done"
         ? current.filter((item) => item.orderId !== orderId)
         : current.map((item) =>
             item.orderId === orderId ? { ...item, status } : item,
@@ -114,8 +184,10 @@ export default function KitchenDashboard() {
     [auth?.restaurantName, auth?.restaurantSlug],
   );
 
-  const pendingCount = queue.filter(o => o.status === "pending").length;
-  const cookingCount = queue.filter(o => o.status === "preparing").length;
+  const pendingCount = queue.filter((o) => o.status === "pending").length;
+  const cookingCount = queue.filter((o) =>
+    ["accepted", "preparing"].includes(o.status),
+  ).length;
   const activeLabel = connected ? "Active" : "Offline";
 
   if (!ready || (auth?.token && !allowed)) {
@@ -238,8 +310,8 @@ export default function KitchenDashboard() {
               <span className="font-display text-primary-container">{cookingCount}</span>
             </div>
             <div className="bg-surface rounded-xl p-md border border-outline-variant shadow-[0_4px_12px_rgba(45,62,97,0.04)] flex flex-col">
-              <span className="font-label-sm text-secondary uppercase tracking-wider mb-2">Ready</span>
-              <span className="font-display text-emerald-700">0</span>
+              <span className="font-label-sm text-secondary uppercase tracking-wider mb-2">Total Queue</span>
+              <span className="font-display text-on-surface">{queue.length}</span>
             </div>
             <div className="bg-surface rounded-xl p-md border border-outline-variant shadow-[0_4px_12px_rgba(45,62,97,0.04)] flex flex-col">
               <span className="font-label-sm text-secondary uppercase tracking-wider mb-2">Kitchen Status</span>
@@ -256,7 +328,8 @@ export default function KitchenDashboard() {
             ) : (
                 queue.map((order) => {
                     const isPending = order.status === 'pending';
-                    const isCooking = order.status === 'preparing';
+                    const isCooking = ["accepted", "preparing"].includes(order.status);
+                    const statusLabel = isCooking ? "COOKING" : "NEW";
 
                     return (
                       <div key={order.orderId} className={`bg-surface rounded-xl border border-outline-variant shadow-[0_4px_12px_rgba(45,62,97,0.04)] overflow-hidden flex flex-col relative ${isPending ? 'border-l-4 border-l-error border-y border-r' : ''}`}>
@@ -269,12 +342,20 @@ export default function KitchenDashboard() {
                           <div>
                             <div className="flex items-center gap-2 mb-1">
                               <span className="font-h3 text-on-surface">Order #{order.orderId.slice(-4)}</span>
-                               {/* Mocking a VIP tag for the first pending order for visual flair like the HTML */}
                                {isPending && queue.indexOf(order) === 0 && (
                                   <span className="px-2 py-0.5 rounded-full bg-error-container text-on-error-container font-label-sm">NEW</span>
                                )}
                             </div>
-                            <span className="font-body-sm text-secondary">Table {order.tableNumber}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="font-body-sm text-secondary">Table {order.tableNumber}</span>
+                              <span className={`px-2 py-0.5 rounded-full font-label-sm ${
+                                isCooking
+                                  ? "bg-primary-fixed text-primary-container"
+                                  : "bg-error-container text-on-error-container"
+                              }`}>
+                                {statusLabel}
+                              </span>
+                            </div>
                           </div>
                           <div className="text-right">
                              <span className={`block font-h3 ${isPending ? 'text-error' : 'text-on-surface'}`}>{order.elapsed || order.timestamp}</span>
@@ -297,7 +378,7 @@ export default function KitchenDashboard() {
                         </div>
 
                         <div className="p-4 bg-surface-container-lowest border-t border-outline-variant mt-auto">
-                            {isPending ? (
+                            {!isCooking ? (
                                 <button
                                     onClick={() => sendStatus(order.orderId, "preparing")}
                                     className="w-full bg-primary-container text-on-primary font-label-md py-3 rounded-lg hover:bg-surface-tint transition-colors flex items-center justify-center gap-2"
@@ -312,7 +393,7 @@ export default function KitchenDashboard() {
                                          Ticket
                                      </button>
                                      <button
-                                         onClick={() => sendStatus(order.orderId, "ready")}
+                                         onClick={() => sendStatus(order.orderId, "done")}
                                          className="flex-[2] bg-emerald-600 text-white font-label-md py-3 rounded-lg hover:bg-emerald-700 transition-colors flex items-center justify-center gap-2"
                                      >
                                         <span className="material-symbols-outlined text-[20px]">check_circle</span>

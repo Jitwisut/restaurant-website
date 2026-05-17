@@ -1,0 +1,198 @@
+$ bun run --watch src/index.ts
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+40 |     res = resolve
+41 |     rej = reject
+42 |   }).catch((err) => {
+43 |     // replace the stack trace that leads to `TCP.onStreamRead` with one that leads back to the
+44 |     // application that created the query
+45 |     Error.captureStackTrace(err)
+               ^
+error: new row for relation "orders" violates check constraint "status_check"
+     length: 448,
+   severity: "ERROR",
+     detail: "Failing row contains (ORD-20260518-001, 1, 79a47950-c164-4ffd-abc2-8dfc3a03eaa8, ready, 2026-05-17 17:11:51.884957, 2026-05-17 17:12:16.149768, 4, 59.00, 0.00, 0.00, 4.13, 63.13, paid, 2026-05-17 17:12:00.643213, 2026-05-17 17:12:00.643213, null, null, null, null, null, null, null).",
+       hint: undefined,
+   position: undefined,
+ internalPosition: undefined,
+ internalQuery: undefined,
+      where: undefined,
+     schema: "public",
+      table: "orders",
+   dataType: undefined,
+ constraint: "status_check",
+       file: "execMain.c",
+    routine: "ExecConstraints",
+       code: "23514"
+
+      at <anonymous> (E:\restaurant-website\app\node_modules\pg-pool\index.js:45:11)
+
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+40 |     res = resolve
+41 |     rej = reject
+42 |   }).catch((err) => {
+43 |     // replace the stack trace that leads to `TCP.onStreamRead` with one that leads back to the
+44 |     // application that created the query
+45 |     Error.captureStackTrace(err)
+               ^
+error: inconsistent types deduced for parameter $3
+     length: 154,
+   severity: "ERROR",
+     detail: "text versus character varying",
+       hint: undefined,
+   position: "44",
+ internalPosition: undefined,
+ internalQuery: undefined,
+      where: undefined,
+     schema: undefined,
+      table: undefined,
+   dataType: undefined,
+ constraint: undefined,
+       file: "parse_param.c",
+    routine: "variable_coerce_param_hook",
+       code: "42P08"
+
+      at <anonymous> (E:\restaurant-website\app\node_modules\pg-pool\index.js:45:11)
+
+40 |     res = resolve
+41 |     rej = reject
+42 |   }).catch((err) => {
+43 |     // replace the stack trace that leads to `TCP.onStreamRead` with one that leads back to the
+44 |     // application that created the query
+45 |     Error.captureStackTrace(err)
+               ^
+error: inconsistent types deduced for parameter $3
+     length: 154,
+   severity: "ERROR",
+     detail: "text versus character varying",
+       hint: undefined,
+   position: "44",
+ internalPosition: undefined,
+ internalQuery: undefined,
+      where: undefined,
+     schema: undefined,
+      table: undefined,
+   dataType: undefined,
+ constraint: undefined,
+       file: "parse_param.c",
+    routine: "variable_coerce_param_hook",
+       code: "42P08"
+
+      at <anonymous> (E:\restaurant-website\app\node_modules\pg-pool\index.js:45:11)
+
+40 |     res = resolve
+41 |     rej = reject
+42 |   }).catch((err) => {
+43 |     // replace the stack trace that leads to `TCP.onStreamRead` with one that leads back to the
+44 |     // application that created the query
+45 |     Error.captureStackTrace(err)
+               ^
+error: inconsistent types deduced for parameter $3
+     length: 154,
+   severity: "ERROR",
+     detail: "text versus character varying",
+       hint: undefined,
+   position: "44",
+ internalPosition: undefined,
+ internalQuery: undefined,
+      where: undefined,
+     schema: undefined,
+      table: undefined,
+   dataType: undefined,
+ constraint: undefined,
+       file: "parse_param.c",
+    routine: "variable_coerce_param_hook",
+       code: "42P08"
+
+      at <anonymous> (E:\restaurant-website\app\node_modules\pg-pool\index.js:45:11)
+
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+40 |     res = resolve
+41 |     rej = reject
+42 |   }).catch((err) => {
+43 |     // replace the stack trace that leads to `TCP.onStreamRead` with one that leads back to the
+44 |     // application that created the query
+45 |     Error.captureStackTrace(err)
+               ^
+error: new row for relation "orders" violates check constraint "status_check"
+     length: 448,
+   severity: "ERROR",
+     detail: "Failing row contains (ORD-20260518-001, 1, 79a47950-c164-4ffd-abc2-8dfc3a03eaa8, ready, 2026-05-17 17:11:51.884957, 2026-05-17 17:13:59.357459, 4, 59.00, 0.00, 0.00, 4.13, 59.00, paid, 2026-05-17 17:12:00.643213, 2026-05-17 17:12:00.643213, null, null, null, null, null, null, null).",
+       hint: undefined,
+   position: undefined,
+ internalPosition: undefined,
+ internalQuery: undefined,
+      where: undefined,
+     schema: "public",
+      table: "orders",
+   dataType: undefined,
+ constraint: "status_check",
+       file: "execMain.c",
+    routine: "ExecConstraints",
+       code: "23514"
+
+      at <anonymous> (E:\restaurant-website\app\node_modules\pg-pool\index.js:45:11)
+
+40 |     res = resolve
+41 |     rej = reject
+42 |   }).catch((err) => {
+43 |     // replace the stack trace that leads to `TCP.onStreamRead` with one that leads back to the
+44 |     // application that created the query
+45 |     Error.captureStackTrace(err)
+               ^
+error: new row for relation "orders" violates check constraint "status_check"
+     length: 406,
+   severity: "ERROR",
+     detail: "Failing row contains (ORD-20260518-002, 1, a8fdc88f-fd9f-4257-affa-850e325f992c, ready, 2026-05-17 17:14:00.907985, 2026-05-17 17:14:08.402681, 4, 59.00, 0.00, 0.00, 0.00, 59.00, unpaid, null, null, null, null, null, null, null, null, null).",
+       hint: undefined,
+   position: undefined,
+ internalPosition: undefined,
+ internalQuery: undefined,
+      where: undefined,
+     schema: "public",
+      table: "orders",
+   dataType: undefined,
+ constraint: "status_check",
+       file: "execMain.c",
+    routine: "ExecConstraints",
+       code: "23514"
+
+      at <anonymous> (E:\restaurant-website\app\node_modules\pg-pool\index.js:45:11)
+
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)

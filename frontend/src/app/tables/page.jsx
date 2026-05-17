@@ -117,6 +117,100 @@ function formatCurrency(amount) {
     : "0.00";
 }
 
+function formatBillDate(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleString("th-TH", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "Asia/Bangkok",
+  });
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function buildBillPrintHtml(bill) {
+  const items = Array.isArray(bill?.items) ? bill.items : [];
+  const payment = bill?.payment || {};
+  const promptpay = payment.promptpay || {};
+  const bank = payment.bank_transfer || {};
+  const rows = items
+    .map(
+      (item) => `
+        <tr>
+          <td>${escapeHtml(item.menu_item_name || "Menu item")}</td>
+          <td class="num">${Number(item.quantity || 0)}</td>
+          <td class="num">${formatCurrency(item.price)}</td>
+          <td class="num">${formatCurrency(item.subtotal)}</td>
+        </tr>
+      `,
+    )
+    .join("");
+
+  return `<!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>Bill ${escapeHtml(bill?.session?.session_id || "")}</title>
+        <style>
+          body { font-family: Arial, sans-serif; color: #0f172a; margin: 0; padding: 24px; }
+          .receipt { max-width: 420px; margin: 0 auto; }
+          h1 { font-size: 22px; margin: 0 0 4px; }
+          .muted { color: #64748b; font-size: 12px; line-height: 1.5; }
+          .meta { border-top: 1px solid #e2e8f0; border-bottom: 1px solid #e2e8f0; margin: 16px 0; padding: 12px 0; display: grid; gap: 6px; font-size: 12px; }
+          table { width: 100%; border-collapse: collapse; font-size: 12px; }
+          th { color: #64748b; text-align: left; border-bottom: 1px solid #e2e8f0; padding: 8px 0; }
+          td { border-bottom: 1px solid #f1f5f9; padding: 8px 0; vertical-align: top; }
+          .num { text-align: right; }
+          .totals { margin-top: 14px; display: grid; gap: 8px; font-size: 13px; }
+          .line { display: flex; justify-content: space-between; gap: 16px; }
+          .grand { border-top: 1px solid #e2e8f0; padding-top: 10px; font-size: 18px; font-weight: 700; }
+          .qr { margin: 18px auto 8px; width: 210px; text-align: center; }
+          .qr img { width: 210px; height: 210px; object-fit: contain; }
+          @media print { body { padding: 0; } .receipt { max-width: none; } }
+        </style>
+      </head>
+      <body>
+        <main class="receipt">
+          <h1>Bill Summary</h1>
+          <div class="muted">Table ${escapeHtml(getTableDisplayNumber(bill?.session?.table_number))}</div>
+          <div class="muted">Session ${escapeHtml(bill?.session?.session_id || "-")}</div>
+          <section class="meta">
+            <div>Opened: ${escapeHtml(formatBillDate(bill?.session?.opened_at))}</div>
+            <div>Closed: ${escapeHtml(formatBillDate(bill?.session?.closed_at))}</div>
+            <div>Payment: ${escapeHtml(bill?.payment_status || "unpaid")}</div>
+          </section>
+          <table>
+            <thead>
+              <tr><th>Item</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Subtotal</th></tr>
+            </thead>
+            <tbody>${rows || '<tr><td colspan="4">No order items.</td></tr>'}</tbody>
+          </table>
+          <section class="totals">
+            <div class="line"><span>Subtotal</span><strong>${formatCurrency(bill?.totals?.subtotal)}</strong></div>
+            <div class="line"><span>Service charge</span><strong>${formatCurrency(bill?.totals?.service_charge_amount)}</strong></div>
+            <div class="line"><span>Tax/VAT</span><strong>${formatCurrency(bill?.totals?.tax_amount)}</strong></div>
+            <div class="line"><span>Discount</span><strong>${formatCurrency(bill?.totals?.discount_amount)}</strong></div>
+            <div class="line grand"><span>Total</span><strong>${formatCurrency(bill?.totals?.grand_total)}</strong></div>
+          </section>
+          ${
+            promptpay.qr_data_url
+              ? `<section class="qr"><img src="${promptpay.qr_data_url}" alt="Payment QR" /><div class="muted">Scan to pay ${formatCurrency(payment.amount)} THB</div><div class="muted">${escapeHtml(promptpay.account_name || "")}</div></section>`
+              : `<section class="meta"><div>Payment QR is not configured.</div><div>${escapeHtml(bank.bank_name || "")} ${escapeHtml(bank.account_number || "")}</div><div>${escapeHtml(bank.account_name || "")}</div></section>`
+          }
+        </main>
+      </body>
+    </html>`;
+}
+
 export default function TablesPage() {
   const { signOut } = useAuth();
   const { auth, ready, allowed } = useRestaurantAccess([
@@ -137,6 +231,7 @@ export default function TablesPage() {
   const [selectedTableNumber, setSelectedTableNumber] = useState(null);
   const [tableOrders, setTableOrders] = useState([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
+  const [billModal, setBillModal] = useState(null);
 
   const loadTables = useCallback(async () => {
     if (!auth?.token) return;
@@ -211,10 +306,13 @@ export default function TablesPage() {
   const closeTable = async (tableNumber) => {
     setBusyTable(tableNumber);
     try {
-      await api.post("/tables/closetable", { number: tableNumber });
+      const response = await api.post("/tables/closetable", { number: tableNumber });
       if (qrModal?.tableNumber === tableNumber) {
         setQrModal(null);
         updateQrCache(null);
+      }
+      if (response.data.bill) {
+        setBillModal(response.data.bill);
       }
       await loadTables();
     } catch (requestError) {
@@ -222,6 +320,20 @@ export default function TablesPage() {
     } finally {
       setBusyTable(null);
     }
+  };
+
+  const printBill = (bill) => {
+    if (typeof window === "undefined" || !bill) return;
+    const popup = window.open("", "_blank", "width=460,height=720");
+    if (!popup) {
+      window.print();
+      return;
+    }
+    popup.document.open();
+    popup.document.write(buildBillPrintHtml(bill));
+    popup.document.close();
+    popup.focus();
+    window.setTimeout(() => popup.print(), 250);
   };
 
   const addTable = async () => {
@@ -309,8 +421,14 @@ export default function TablesPage() {
 
   useEffect(() => {
     const loadOrders = async () => {
-      if (!selectedTable || !auth?.token) {
+      if (
+        !selectedTable ||
+        selectedTable.status !== "open" ||
+        !selectedTable.customer_session ||
+        !auth?.token
+      ) {
         setTableOrders([]);
+        setOrdersLoading(false);
         return;
       }
 
@@ -319,7 +437,12 @@ export default function TablesPage() {
         const response = await api.post("/order/orderhistory", {
           table_number: getTableNumberValue(selectedTable),
         });
-        setTableOrders(response.data.order || []);
+        const sessionOrders = (response.data.order || []).filter(
+          (order) =>
+            String(order.session_id || "") ===
+            String(selectedTable.customer_session || ""),
+        );
+        setTableOrders(sessionOrders);
       } catch (requestError) {
         setTableOrders([]);
         setError(requestError.normalizedMessage || "Unable to load table orders.");
@@ -333,6 +456,10 @@ export default function TablesPage() {
 
   const latestOrder = tableOrders[0] || null;
   const latestOrderItems = Array.isArray(latestOrder?.items) ? latestOrder.items : [];
+  const showActiveOrder =
+    selectedTable?.status === "open" &&
+    Boolean(selectedTable?.customer_session) &&
+    (ordersLoading || latestOrderItems.length > 0);
   const openTableCount = tables.filter((table) => table.status === "open").length;
   const availableTableCount = tables.filter((table) => table.status !== "open").length;
 
@@ -878,14 +1005,14 @@ export default function TablesPage() {
                   </div>
                 </div>
 
-                <div className="flex flex-col items-center gap-4 rounded-xl border border-surface-variant bg-surface-container-lowest p-md shadow-sm">
-                  <div className="flex flex-col items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => selectedQr && setQrModal(selectedQr)}
-                      className="group flex h-24 w-24 items-center justify-center rounded-lg border-2 border-surface-variant bg-white shadow-inner transition-colors hover:border-primary-container"
-                    >
-                      {selectedQr?.qrCodeUrl ? (
+                {selectedQr ? (
+                  <div className="flex flex-col items-center gap-4 rounded-xl border border-surface-variant bg-surface-container-lowest p-md shadow-sm">
+                    <div className="flex flex-col items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setQrModal(selectedQr)}
+                        className="group flex h-24 w-24 items-center justify-center rounded-lg border-2 border-surface-variant bg-white shadow-inner transition-colors hover:border-primary-container"
+                      >
                         <div className="relative h-20 w-20 overflow-hidden rounded-md">
                           <Image
                             src={selectedQr.qrCodeUrl}
@@ -896,69 +1023,62 @@ export default function TablesPage() {
                             unoptimized
                           />
                         </div>
-                      ) : (
-                        <span className="material-symbols-outlined text-5xl text-primary-container">
-                          qr_code_2
-                        </span>
-                      )}
-                    </button>
-                    <p className="font-label-sm text-label-sm uppercase tracking-wider text-on-surface-variant">
-                      Scan to Order
-                    </p>
-                  </div>
-
-                  <div className="flex w-full flex-col items-center border-t border-surface-variant pt-3">
-                    <p className="mb-1 font-label-md text-label-md text-on-surface">
-                      Digital Menu
-                    </p>
-                    <button
-                      type="button"
-                      onClick={copyQrLink}
-                      disabled={!selectedQr?.fullUrl}
-                      className="flex items-center gap-1 text-sm font-medium text-primary transition hover:underline disabled:opacity-50"
-                    >
-                      Copy Link
-                      <span className="material-symbols-outlined text-xs">content_copy</span>
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <h3 className="mb-sm flex items-center justify-between font-h3 text-h3 text-on-surface">
-                    Current Order
-                    <span className="font-normal text-body-sm text-on-surface-variant">
-                      {latestOrder ? formatCurrency(latestOrder.total) : "0.00"}
-                    </span>
-                  </h3>
-                  {ordersLoading ? (
-                    <div className="rounded-xl bg-surface-container-low px-4 py-4 text-sm text-on-surface-variant">
-                      Loading order history...
+                      </button>
+                      <p className="font-label-sm text-label-sm uppercase tracking-wider text-on-surface-variant">
+                        Scan to Order
+                      </p>
                     </div>
-                  ) : latestOrderItems.length > 0 ? (
-                    <ul className="space-y-xs text-sm">
-                      {latestOrderItems.map((item, index) => (
-                        <li
-                          key={`${item.menu_item_name || "item"}-${index}`}
-                          className="flex items-center justify-between border-b border-surface-variant py-1"
-                        >
-                          <span className="text-on-surface">
-                            {(item.quantity || 1)}x {item.menu_item_name || "Menu item"}
-                          </span>
-                          <span className="text-on-surface-variant">
-                            {formatCurrency(item.price)}
-                          </span>
+
+                    <div className="flex w-full flex-col items-center border-t border-surface-variant pt-3">
+                      <p className="mb-1 font-label-md text-label-md text-on-surface">
+                        Digital Menu
+                      </p>
+                      <button
+                        type="button"
+                        onClick={copyQrLink}
+                        className="flex items-center gap-1 text-sm font-medium text-primary transition hover:underline"
+                      >
+                        Copy Link
+                        <span className="material-symbols-outlined text-xs">content_copy</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
+                {showActiveOrder ? (
+                  <div>
+                    <h3 className="mb-sm flex items-center justify-between font-h3 text-h3 text-on-surface">
+                      Current Order
+                      <span className="font-normal text-body-sm text-on-surface-variant">
+                        {latestOrder ? formatCurrency(latestOrder.total) : "0.00"}
+                      </span>
+                    </h3>
+                    {ordersLoading ? (
+                      <div className="rounded-xl bg-surface-container-low px-4 py-4 text-sm text-on-surface-variant">
+                        Loading order history...
+                      </div>
+                    ) : (
+                      <ul className="space-y-xs text-sm">
+                        {latestOrderItems.map((item, index) => (
+                          <li
+                            key={`${item.menu_item_name || "item"}-${index}`}
+                            className="flex items-center justify-between border-b border-surface-variant py-1"
+                          >
+                            <span className="text-on-surface">
+                              {(item.quantity || 1)}x {item.menu_item_name || "Menu item"}
+                            </span>
+                            <span className="text-on-surface-variant">
+                              {formatCurrency(item.price)}
+                            </span>
+                          </li>
+                        ))}
+                        <li className="py-1 italic text-on-surface-variant">
+                          Latest status: {latestOrder.status || "pending"}
                         </li>
-                      ))}
-                      <li className="py-1 italic text-on-surface-variant">
-                        Latest status: {latestOrder.status || "pending"}
-                      </li>
-                    </ul>
-                  ) : (
-                    <div className="rounded-xl bg-surface-container-low px-4 py-4 text-sm text-on-surface-variant">
-                      No order history for this table yet.
-                    </div>
-                  )}
-                </div>
+                      </ul>
+                    )}
+                  </div>
+                ) : null}
               </>
             ) : (
               <div className="rounded-xl bg-surface-container-low px-4 py-4 text-sm text-on-surface-variant">
@@ -1020,28 +1140,189 @@ export default function TablesPage() {
               </button>
             )}
 
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => selectedQr && setQrModal(selectedQr)}
-                className="flex w-full items-center justify-center gap-2 rounded-lg border border-surface-variant bg-surface-container-lowest py-sm font-label-md text-label-md text-on-surface transition-colors hover:bg-surface-container-low"
-              >
-                <span className="material-symbols-outlined text-sm">qr_code_2</span>
-                QR
-              </button>
-              <button
-                type="button"
-                onClick={copyQrLink}
-                disabled={!selectedQr?.fullUrl}
-                className="flex w-full items-center justify-center gap-2 rounded-lg border border-surface-variant bg-surface-container-lowest py-sm font-label-md text-label-md text-on-surface transition-colors hover:bg-surface-container-low disabled:opacity-50"
-              >
-                <span className="material-symbols-outlined text-sm">content_copy</span>
-                Copy Link
-              </button>
-            </div>
+            {selectedQr ? (
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setQrModal(selectedQr)}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-surface-variant bg-surface-container-lowest py-sm font-label-md text-label-md text-on-surface transition-colors hover:bg-surface-container-low"
+                >
+                  <span className="material-symbols-outlined text-sm">qr_code_2</span>
+                  QR
+                </button>
+                <button
+                  type="button"
+                  onClick={copyQrLink}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-surface-variant bg-surface-container-lowest py-sm font-label-md text-label-md text-on-surface transition-colors hover:bg-surface-container-low"
+                >
+                  <span className="material-symbols-outlined text-sm">content_copy</span>
+                  Copy Link
+                </button>
+              </div>
+            ) : null}
           </div>
         </aside>
       </div>
+
+      {billModal && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              className="app-modal-overlay bg-black/40"
+              onClick={(event) => {
+                if (event.target === event.currentTarget) {
+                  setBillModal(null);
+                }
+              }}
+            >
+              <div
+                className="app-modal-card rounded-[28px] bg-white p-6 shadow-2xl"
+                style={{ "--app-modal-width": "780px" }}
+              >
+                <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">
+                      Bill Summary
+                    </p>
+                    <h2 className="mt-2 text-2xl font-semibold text-slate-950">
+                      Table {getTableDisplayNumber(billModal.session?.table_number)}
+                    </h2>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Session {billModal.session?.session_id}
+                    </p>
+                  </div>
+                  <div className="rounded-xl bg-emerald-50 px-4 py-3 text-right text-sm text-emerald-700">
+                    <div className="font-semibold">Payment</div>
+                    <div>{billModal.payment_status || "unpaid"}</div>
+                  </div>
+                </div>
+
+                <div className="mt-4 grid gap-3 text-sm text-slate-600 sm:grid-cols-2">
+                  <div>Opened: {formatBillDate(billModal.session?.opened_at)}</div>
+                  <div>Closed: {formatBillDate(billModal.session?.closed_at)}</div>
+                </div>
+
+                <div className="mt-5 max-h-72 overflow-y-auto rounded-2xl border border-slate-200">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
+                      <tr>
+                        <th className="px-4 py-3 font-semibold">Item</th>
+                        <th className="px-4 py-3 text-right font-semibold">Qty</th>
+                        <th className="px-4 py-3 text-right font-semibold">Price</th>
+                        <th className="px-4 py-3 text-right font-semibold">Subtotal</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {(billModal.items || []).map((item, index) => (
+                        <tr key={`${item.order_id}-${index}`}>
+                          <td className="px-4 py-3 text-slate-900">
+                            {item.menu_item_name || "Menu item"}
+                          </td>
+                          <td className="px-4 py-3 text-right">{item.quantity || 0}</td>
+                          <td className="px-4 py-3 text-right">{formatCurrency(item.price)}</td>
+                          <td className="px-4 py-3 text-right font-semibold">
+                            {formatCurrency(item.subtotal)}
+                          </td>
+                        </tr>
+                      ))}
+                      {(billModal.items || []).length === 0 ? (
+                        <tr>
+                          <td className="px-4 py-6 text-center text-slate-500" colSpan={4}>
+                            No sent order items in this session.
+                          </td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_260px]">
+                  <div className="grid gap-2 rounded-2xl bg-slate-50 p-4 text-sm">
+                    <div className="flex justify-between">
+                      <span>Subtotal</span>
+                      <strong>{formatCurrency(billModal.totals?.subtotal)}</strong>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Service charge</span>
+                      <strong>{formatCurrency(billModal.totals?.service_charge_amount)}</strong>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Tax/VAT</span>
+                      <strong>{formatCurrency(billModal.totals?.tax_amount)}</strong>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Discount</span>
+                      <strong>{formatCurrency(billModal.totals?.discount_amount)}</strong>
+                    </div>
+                    <div className="flex justify-between border-t border-slate-200 pt-3 text-lg text-slate-950">
+                      <span>Grand total</span>
+                      <strong>{formatCurrency(billModal.totals?.grand_total)}</strong>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4 text-center">
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                      Payment QR
+                    </p>
+                    {billModal.payment?.promptpay?.qr_data_url ? (
+                      <>
+                        <div className="relative mx-auto mt-3 h-48 w-48 overflow-hidden rounded-xl border border-slate-100 bg-white">
+                          <Image
+                            src={billModal.payment.promptpay.qr_data_url}
+                            alt="Payment QR code"
+                            fill
+                            sizes="192px"
+                            className="object-contain"
+                            unoptimized
+                          />
+                        </div>
+                        <p className="mt-3 text-sm font-semibold text-slate-950">
+                          Pay {formatCurrency(billModal.payment?.amount)} THB
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {billModal.payment.promptpay.account_name || "PromptPay"}
+                        </p>
+                      </>
+                    ) : (
+                      <div className="mt-3 rounded-xl bg-amber-50 p-4 text-left text-sm text-amber-800">
+                        <p className="font-semibold">QR payment is not configured.</p>
+                        {billModal.payment?.bank_transfer?.enabled ? (
+                          <p className="mt-2">
+                            {billModal.payment.bank_transfer.bank_name || "Bank transfer"}{" "}
+                            {billModal.payment.bank_transfer.account_number || ""}
+                          </p>
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                  <button
+                    type="button"
+                    onClick={() => printBill(billModal)}
+                    className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    Print bill
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBillModal(null)}
+                    className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    Close
+                  </button>
+                  <Link
+                    href={buildRestaurantPath(auth, "orders")}
+                    className="rounded-2xl bg-slate-900 px-4 py-3 text-center text-sm font-semibold text-white transition hover:bg-slate-800"
+                  >
+                    Go to orders
+                  </Link>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
 
       {qrModal && typeof document !== "undefined"
         ? createPortal(
