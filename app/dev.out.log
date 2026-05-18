@@ -37,3 +37,9 @@ Elysia is running at 0.0.0.0:4000
 Elysia is running at 0.0.0.0:4000
 ✅ DB Connected
 Elysia is running at 0.0.0.0:4000
+[WS IN] user=kitchen role=kitchen typeof=object raw={"type":"order_status","to":"session:5fec32b1-1ba6-4b98-bbf0-b76ba6623a5d","order_id":"ORD-20260518-005","status":"done"}
+[WS IN] user=kitchen role=kitchen typeof=object raw={"type":"order_status","to":"session:5fec32b1-1ba6-4b98-bbf0-b76ba6623a5d","order_id":"ORD-20260518-004","status":"done"}
+[WS IN] user=kitchen role=kitchen typeof=object raw={"type":"ping"}
+[WS IN] user=kitchen role=kitchen typeof=object raw={"type":"ping"}
+[WS IN] user=kitchen role=kitchen typeof=object raw={"type":"ping"}
+[WS IN] user=kitchen role=kitchen typeof=object raw={"type":"ping"}

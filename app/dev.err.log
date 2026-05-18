@@ -196,3 +196,9 @@ error: new row for relation "orders" violates check constraint "status_check"
 [elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
 [elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
 [elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+[elysia-rate-limit] failed to determine client address (reason: server or request is undefined)
+error: script "dev" exited with code 4

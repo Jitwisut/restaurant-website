@@ -151,44 +151,23 @@ async function validateGuestSocketPayload(payload: any) {
   );
 }
 
-async function generateOrderId(restaurantId: string): Promise<string> {
+function buildOrderDatePrefix() {
   const date = new Date();
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
-  const datePrefix = `${year}${month}${day}`;
-
-  try {
-    const result = await db.query(
-      `SELECT id
-         FROM orders
-        WHERE id LIKE $1
-          AND restaurant_id = $2
-        ORDER BY id DESC
-        LIMIT 1`,
-      [`ORD-${datePrefix}-%`, restaurantId],
-    );
-
-    let sequence = 1;
-    if (result.rows.length > 0) {
-      const parts = String(result.rows[0].id).split("-");
-      sequence = Number.parseInt(parts[2], 10) + 1;
-    }
-
-    return `ORD-${datePrefix}-${String(sequence).padStart(3, "0")}`;
-  } catch (err) {
-    console.error("Error generating order id:", err);
-    return `ORD-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-  }
+  return `${year}${month}${day}`;
 }
 
 async function saveOrderToDb(order: {
-  id: string;
+  id?: string;
   menu: any;
   table_number: number;
   restaurant_id: string;
   session?: UUID;
-}) {
+}): Promise<string | null> {
+  const datePrefix = buildOrderDatePrefix();
+
   try {
     const settingsPayload = await getRestaurantSettings(Number(order.restaurant_id));
     const orderSettings = settingsPayload?.settings?.order_settings || {};
@@ -209,48 +188,82 @@ async function saveOrderToDb(order: {
     );
     const grandTotal = subtotal + serviceChargeAmount + taxAmount;
 
-    await db.query("BEGIN");
-    await db.query(
-      `INSERT INTO orders
+    const client = await db.connect();
+
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+        `orders:${datePrefix}`,
+      ]);
+
+      const orderResult = await client.query(
+      `WITH next_order AS (
+         SELECT 'ORD-' || $1::text || '-' || LPAD(
+           (
+             COALESCE(
+               MAX(NULLIF(SUBSTRING(id FROM $9), '')::integer),
+               0
+             ) + 1
+           )::text,
+           3,
+           '0'
+         ) AS id
+         FROM orders
+        WHERE id LIKE $2
+       )
+       INSERT INTO orders
         (id, table_number, customer_session, status, updated_at, restaurant_id,
          subtotal, service_charge_amount, tax_amount, grand_total)
-       VALUES ($1, $2, $3, 'pending', NOW(), $4, $5, $6, $7, $8)`,
+       SELECT id, $4, $5, 'pending', NOW(), $3, $6, $7, $8, $10
+         FROM next_order
+       RETURNING id`,
       [
-        order.id,
+        datePrefix,
+        `ORD-${datePrefix}-%`,
+        order.restaurant_id,
         order.table_number,
         order.session,
-        order.restaurant_id,
         subtotal,
         serviceChargeAmount,
         taxAmount,
+        `^ORD-${datePrefix}-([0-9]+)$`,
         grandTotal,
       ],
-    );
-
-    if (Array.isArray(items)) {
-      for (const item of items) {
-        await db.query(
-          `INSERT INTO order_items
-            (order_id, menu_item_name, quantity, price, notes, restaurant_id)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [
-            order.id,
-            item.name,
-            item.qty,
-            item.price,
-            item.notes || null,
-            order.restaurant_id,
-          ],
-        );
+      );
+      const orderId = orderResult.rows?.[0]?.id;
+      if (!orderId) {
+        throw new Error("Unable to generate order id");
       }
-    }
 
-    await db.query("COMMIT");
-    return true;
+      if (Array.isArray(items)) {
+        for (const item of items) {
+          await client.query(
+            `INSERT INTO order_items
+              (order_id, menu_item_name, quantity, price, notes, restaurant_id)
+            VALUES ($1, $2, $3, $4, $5, $6)`,
+            [
+              orderId,
+              item.name,
+              item.qty,
+              item.price,
+              item.notes || null,
+              order.restaurant_id,
+            ],
+          );
+        }
+      }
+
+      await client.query("COMMIT");
+      return orderId;
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
   } catch (err) {
-    await db.query("ROLLBACK");
     console.error("Error saving order:", (err as Error).message);
-    return false;
+    return null;
   }
 }
 
@@ -709,15 +722,17 @@ async function routeMessage(
         return;
       }
 
-      const orderId = await generateOrderId(sender.restaurant_id);
-      const saved = await saveOrderToDb({
-        id: orderId,
-        menu: msg.menu,
-        session: msg.session,
-        table_number: tableNumber,
-        restaurant_id: sender.restaurant_id,
-      });
-      if (!saved) {
+      let orderId: string | null = null;
+      for (let attempt = 0; attempt < 3 && !orderId; attempt += 1) {
+        orderId = await saveOrderToDb({
+          menu: msg.menu,
+          session: msg.session,
+          table_number: tableNumber,
+          restaurant_id: sender.restaurant_id,
+        });
+      }
+
+      if (!orderId) {
         sendJSON(ws, {
           type: "error",
           message: "Unable to save order. Please try again.",
