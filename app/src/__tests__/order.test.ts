@@ -170,4 +170,72 @@ describe("Order Controller - Order History", () => {
       false,
     );
   });
+
+  test("ready-to-serve queue returns ready orders and served orders disappear", async () => {
+    const app = createTestApp();
+    const sessionId = await createOpenTable(15, TEST_RESTAURANT_ID);
+    const readyOrderId = `ORD-SERVE-READY-${Date.now()}`;
+
+    await db.query(
+      `INSERT INTO orders (id, table_number, customer_session, status, restaurant_id)
+       VALUES ($1, 15, $2, 'ready', $3)`,
+      [readyOrderId, sessionId, TEST_RESTAURANT_ID],
+    );
+
+    const readyResponse = await app.handle(
+      new Request("http://localhost/order/ready-to-serve", {
+        method: "GET",
+        headers: authHeaders({ role: "staff" }),
+      }),
+    );
+
+    expect(readyResponse.status).toBe(200);
+    const readyData = await readyResponse.json();
+    expect(readyData.order.some((order: any) => order.id === readyOrderId)).toBe(true);
+
+    const servedResponse = await app.handle(
+      new Request(`http://localhost/order/${readyOrderId}/served`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders({ role: "staff" }) },
+        body: JSON.stringify({}),
+      }),
+    );
+
+    expect(servedResponse.status).toBe(200);
+    const servedOrder = await db.query("SELECT status FROM orders WHERE id=$1", [
+      readyOrderId,
+    ]);
+    expect(servedOrder.rows[0].status).toBe("served");
+
+    const afterResponse = await app.handle(
+      new Request("http://localhost/order/ready-to-serve", {
+        method: "GET",
+        headers: authHeaders({ role: "staff" }),
+      }),
+    );
+    const afterData = await afterResponse.json();
+    expect(afterData.order.some((order: any) => order.id === readyOrderId)).toBe(false);
+  });
+
+  test("kitchen cannot mark a ready order served", async () => {
+    const app = createTestApp();
+    const sessionId = await createOpenTable(16, TEST_RESTAURANT_ID);
+    const readyOrderId = `ORD-SERVE-KITCHEN-${Date.now()}`;
+
+    await db.query(
+      `INSERT INTO orders (id, table_number, customer_session, status, restaurant_id)
+       VALUES ($1, 16, $2, 'ready', $3)`,
+      [readyOrderId, sessionId, TEST_RESTAURANT_ID],
+    );
+
+    const response = await app.handle(
+      new Request(`http://localhost/order/${readyOrderId}/served`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders({ role: "kitchen" }) },
+        body: JSON.stringify({}),
+      }),
+    );
+
+    expect(response.status).toBe(403);
+  });
 });

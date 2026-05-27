@@ -3,6 +3,7 @@ import { Orderscontroller } from "../Controller/Ordercontroller";
 export const Orderrouter = (app: Elysia) => {
   app.group("/order", (app) => {
     app.get("/active", Orderscontroller.active);
+    app.get("/ready-to-serve", Orderscontroller.readyToServe);
     app.post("/orderhistory", Orderscontroller.orderhistory, {
       body: t.Object({
         table_number: t.Optional(
@@ -22,6 +23,14 @@ export const Orderrouter = (app: Elysia) => {
         status: t.String(),
         reason: t.Optional(t.String()),
       }),
+    });
+    app.post("/:id/served", Orderscontroller.markServed, {
+      params: t.Object({ id: t.String() }),
+      body: t.Optional(
+        t.Object({
+          note: t.Optional(t.String()),
+        }),
+      ),
     });
     return app;
   });

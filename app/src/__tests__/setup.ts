@@ -219,6 +219,7 @@ export async function setupTestDB() {
             'accepted',
             'preparing',
             'ready',
+            'served',
             'completed',
             'cancelled',
             'rejected'
@@ -259,6 +260,27 @@ export async function setupTestDB() {
   await db.query(`
     CREATE INDEX IF NOT EXISTS idx_tables_restaurant_status
       ON tables(restaurant_id, status)
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS order_events (
+      id BIGSERIAL PRIMARY KEY,
+      restaurant_id INTEGER NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+      session_id TEXT,
+      order_id TEXT,
+      actor_role VARCHAR(50),
+      actor_email VARCHAR(255),
+      event_type VARCHAR(80) NOT NULL,
+      metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS idx_order_events_session
+      ON order_events(restaurant_id, session_id, created_at DESC)
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS idx_order_events_order
+      ON order_events(restaurant_id, order_id, created_at DESC)
   `);
 
   await db.query(`

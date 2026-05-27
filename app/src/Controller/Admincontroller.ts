@@ -3,7 +3,7 @@ import bcryptjs from "bcryptjs";
 import { ensureSalesSchema, getDB } from "../lib/connect";
 import { requireRole } from "../middleware/restaurantScope";
 import { writeSuperadminAudit } from "../lib/superadminAudit";
-import { getRestaurantPresence } from "../router/websocket";
+import { getRestaurantPresence, notifyRestaurantClients } from "../router/websocket";
 
 const db = getDB();
 
@@ -498,6 +498,71 @@ export const Admincontroller = {
 
     set.status = 200;
     return { message: "Success update menu", menu: serializeMenuRow(result.rows[0]) };
+  },
+
+  updateMenuAvailability: async (
+    context: Context & {
+      params: { id: string };
+      body: { isAvailable?: boolean; is_available?: boolean };
+      jwt?: any;
+    },
+  ) => {
+    const { params, body, set } = context;
+    const scope = await requireRole(context, ["admin", "owner", "superadmin"]);
+    if (!scope.ok) return scope.response;
+
+    const id = Number(params.id);
+    if (!Number.isFinite(id) || id <= 0) {
+      set.status = 400;
+      return { message: "Invalid menu id" };
+    }
+
+    if (
+      typeof body.isAvailable !== "boolean" &&
+      typeof body.is_available !== "boolean"
+    ) {
+      set.status = 400;
+      return { message: "isAvailable is required" };
+    }
+
+    const nextAvailable =
+      typeof body.isAvailable === "boolean"
+        ? body.isAvailable
+        : Boolean(body.is_available);
+
+    const before = await db.query(
+      "SELECT * FROM menu_new WHERE id=$1 AND restaurant_id=$2",
+      [id, scope.restaurantId],
+    );
+    if (before.rowCount === 0) {
+      set.status = 404;
+      return { message: "Menu item not found in this restaurant" };
+    }
+
+    const result = await db.query(
+      `UPDATE menu_new
+          SET is_available=$3
+        WHERE id=$1
+          AND restaurant_id=$2
+        RETURNING id, name, price, category, description, ingredients, is_available, image_blob, image_mime`,
+      [id, scope.restaurantId, nextAvailable],
+    );
+
+    const menu = serializeMenuRow(result.rows[0]);
+    await writeAdminAudit(scope, "admin.menu.availability.updated", {
+      oldValue: serializeMenuRow(before.rows[0]),
+      newValue: menu,
+    });
+    notifyRestaurantClients(scope.restaurantId, {
+      type: "menu_availability_updated",
+      menu,
+      menu_id: id,
+      isAvailable: nextAvailable,
+      timestamp: new Date().toISOString(),
+    });
+
+    set.status = 200;
+    return { message: "Success update menu availability", menu };
   },
 
   deleteMenu: async (

@@ -4,6 +4,7 @@ import { requireRole } from "../middleware/restaurantScope";
 import { writeSuperadminAudit } from "../lib/superadminAudit";
 import { buildGuestSessionUsername } from "../lib/guestSession";
 import { notifyAdmins } from "../router/websocket";
+import { writeOrderEvent } from "../lib/orderEvents";
 
 const db = getDB();
 
@@ -12,6 +13,7 @@ const ORDER_STATUSES = [
   "accepted",
   "preparing",
   "ready",
+  "served",
   "completed",
   "cancelled",
   "rejected",
@@ -122,6 +124,7 @@ async function listOrders(scope: any, filters: {
   tableNumber?: number | string | null;
   status?: string | null;
   activeOnly?: boolean;
+  readyToServe?: boolean;
   paymentStatus?: string | null;
 }) {
   await ensureSalesSchema();
@@ -146,6 +149,22 @@ async function listOrders(scope: any, filters: {
 
   if (filters.activeOnly) {
     clauses.push("o.status IN ('pending', 'accepted', 'preparing')");
+    clauses.push("s.session_id IS NOT NULL");
+    clauses.push("s.closed_at IS NULL");
+    clauses.push(
+      `EXISTS (
+        SELECT 1
+          FROM tables t
+         WHERE t.restaurant_id = o.restaurant_id
+           AND t.table_number::text = o.table_number::text
+           AND t.customer_session::text = o.customer_session::text
+           AND t.status = 'open'
+      )`,
+    );
+  }
+
+  if (filters.readyToServe) {
+    clauses.push("o.status = 'ready'");
     clauses.push("s.session_id IS NOT NULL");
     clauses.push("s.closed_at IS NULL");
     clauses.push(
@@ -226,6 +245,29 @@ async function updateOrderPayment(scope: any, orderId: string, input: {
     newValue: order,
     reason: input.reason || input.note || null,
   });
+  if (order?.session_id) {
+    const eventType =
+      input.paymentStatus === "pending_review"
+        ? "payment_submitted"
+        : input.paymentStatus === "paid"
+          ? "payment_approved"
+          : input.paymentStatus === "rejected"
+            ? "payment_rejected"
+            : `payment_${input.paymentStatus}`;
+    await writeOrderEvent({
+      restaurantId: scope.restaurantId,
+      sessionId: order.session_id,
+      orderId,
+      actorRole: scope.payload?.role || null,
+      actorEmail: scope.payload?.email || null,
+      eventType,
+      metadata: {
+        payment_status: input.paymentStatus,
+        reference: input.reference || null,
+        note: input.note || input.reason || null,
+      },
+    });
+  }
   notifyAdmins(scope.restaurantId, {
     type: "order_updated",
     order,
@@ -280,6 +322,19 @@ export const Orderscontroller = {
     return { order };
   },
 
+  readyToServe: async (context: Context & { jwt?: any }) => {
+    const scope = await requireRole(context, [
+      "admin",
+      "owner",
+      "staff",
+      "superadmin",
+    ]);
+    if (!scope.ok) return scope.response;
+
+    const order = await listOrders(scope, { readyToServe: true });
+    return { order };
+  },
+
   updateStatus: async (
     context: Context & {
       params: { id: string };
@@ -317,7 +372,7 @@ export const Orderscontroller = {
       `UPDATE orders
           SET status = $3,
               completed_at = CASE
-                WHEN $3 = 'completed' THEN COALESCE(completed_at, NOW())
+                WHEN $3 IN ('completed', 'served') THEN COALESCE(completed_at, NOW())
                 ELSE completed_at
               END,
               updated_at = NOW()
@@ -338,11 +393,96 @@ export const Orderscontroller = {
       newValue: order,
       reason: body.reason || null,
     });
+    if (order?.session_id) {
+      await writeOrderEvent({
+        restaurantId: scope.restaurantId,
+        sessionId: order.session_id,
+        orderId: params.id,
+        actorRole: scope.payload?.role || null,
+        actorEmail: scope.payload?.email || null,
+        eventType:
+          status === "rejected"
+            ? "order_rejected"
+            : status === "cancelled"
+              ? "order_cancelled"
+              : `order_${status}`,
+        metadata: {
+          status,
+          reason: body.reason || null,
+        },
+      });
+    }
     notifyAdmins(scope.restaurantId, {
       type: "order_updated",
       order,
       order_id: params.id,
       status,
+      timestamp: new Date().toISOString(),
+    });
+
+    return { order };
+  },
+
+  markServed: async (
+    context: Context & {
+      params: { id: string };
+      body?: { note?: string };
+      jwt?: any;
+    },
+  ) => {
+    const { set, params } = context;
+    const scope = await requireRole(context, [
+      "admin",
+      "owner",
+      "staff",
+      "superadmin",
+    ]);
+    if (!scope.ok) return scope.response;
+
+    const before = await getOrderSnapshot(scope.restaurantId, params.id);
+    if (!before) {
+      set.status = 404;
+      return { message: "Order not found" };
+    }
+
+    const result = await db.query(
+      `UPDATE orders
+          SET status = 'served',
+              completed_at = COALESCE(completed_at, NOW()),
+              updated_at = NOW()
+        WHERE restaurant_id = $1
+          AND id = $2
+          AND status = 'ready'
+        RETURNING id`,
+      [scope.restaurantId, params.id],
+    );
+
+    if (result.rowCount === 0) {
+      set.status = 409;
+      return { message: "Only ready orders can be marked served" };
+    }
+
+    const order = await getOrderSnapshot(scope.restaurantId, params.id);
+    await writeOrderAudit(scope, "order.served", {
+      oldValue: before,
+      newValue: order,
+    });
+    if (order?.session_id) {
+      await writeOrderEvent({
+        restaurantId: scope.restaurantId,
+        sessionId: order.session_id,
+        orderId: params.id,
+        actorRole: scope.payload?.role || null,
+        actorEmail: scope.payload?.email || null,
+        eventType: "order_served",
+        metadata: { status: "served" },
+      });
+    }
+    notifyAdmins(scope.restaurantId, {
+      type: "order_updated",
+      order,
+      order_id: params.id,
+      status: "served",
       timestamp: new Date().toISOString(),
     });
 

@@ -20,6 +20,7 @@ import {
   getRestaurantSettings,
   isWithinBusinessHours,
 } from "../lib/restaurantSettings";
+import { writeOrderEvent } from "../lib/orderEvents";
 
 const db = getDB();
 
@@ -175,6 +176,33 @@ async function saveOrderToDb(order: {
       Number(orderSettings.serviceChargePercent || 0) / 100;
     const taxRate = Number(orderSettings.taxPercent || 0) / 100;
     const items = order.menu?.items;
+    if (!Array.isArray(items) || items.length === 0) {
+      throw new Error("Order items are required");
+    }
+
+    const itemIds = items
+      .map((item: any) => Number(item.id))
+      .filter((id: number) => Number.isFinite(id) && id > 0);
+    if (itemIds.length !== items.length) {
+      throw new Error("All order items must include a valid menu id");
+    }
+
+    const availability = await db.query(
+      `SELECT id, is_available
+         FROM menu_new
+        WHERE restaurant_id = $1
+          AND id = ANY($2::int[])`,
+      [order.restaurant_id, itemIds],
+    );
+    const availableById = new Map(
+      availability.rows.map((row: any) => [Number(row.id), row.is_available !== false]),
+    );
+    const blockedItem = items.find(
+      (item: any) => availableById.get(Number(item.id)) !== true,
+    );
+    if (blockedItem) {
+      throw new Error(`${blockedItem.name || "Menu item"} is unavailable`);
+    }
     const subtotal = Array.isArray(items)
       ? items.reduce(
           (sum: number, item: any) =>
@@ -330,6 +358,19 @@ export function notifyAdmins(restaurantId: string | number, payload: any) {
   const restSockets = getRestaurantSockets(String(restaurantId));
   Array.from(restSockets.admin.values()).forEach((adminWs) => {
     sendJSON(adminWs, payload);
+  });
+}
+
+export function notifyRestaurantClients(
+  restaurantId: string | number,
+  payload: any,
+  roles: Role[] = ["user", "kitchen", "admin"],
+) {
+  const restSockets = getRestaurantSockets(String(restaurantId));
+  roles.forEach((role) => {
+    Array.from(restSockets[role].values()).forEach((targetWs) => {
+      sendJSON(targetWs, payload);
+    });
   });
 }
 
@@ -754,6 +795,18 @@ async function routeMessage(
         });
       });
       if (orderSnapshot) {
+        await writeOrderEvent({
+          restaurantId: sender.restaurant_id,
+          sessionId: String(msg.session),
+          orderId,
+          actorRole: sender.jwt_role,
+          actorEmail: null,
+          eventType: "order_created",
+          metadata: {
+            table_number: msg.table_number,
+            items: (msg.menu as any)?.items || [],
+          },
+        });
         notifyAdmins(sender.restaurant_id, {
           type: "order_created",
           order: orderSnapshot,
@@ -828,6 +881,21 @@ async function routeMessage(
       }
 
       if (orderSnapshot) {
+        await writeOrderEvent({
+          restaurantId: sender.restaurant_id,
+          sessionId: orderSnapshot.session_id || null,
+          orderId: msg.order_id,
+          actorRole: sender.jwt_role,
+          actorEmail: null,
+          eventType:
+            orderSnapshot.status === "rejected"
+              ? "order_rejected"
+              : `order_${orderSnapshot.status}`,
+          metadata: {
+            status: orderSnapshot.status,
+            kitchen_status: msg.status,
+          },
+        });
         notifyAdmins(sender.restaurant_id, {
           type: "order_updated",
           order: orderSnapshot,

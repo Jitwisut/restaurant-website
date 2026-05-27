@@ -76,7 +76,7 @@ export function useRestaurantAccess(allowedRoles = []) {
     if (
       !slug &&
       auth.restaurantSlug &&
-      /^\/(admin|tables|orders|profile|kitchen|billing)$/.test(pathname || "")
+      /^\/(admin|tables|orders|profile|kitchen|serve|billing)$/.test(pathname || "")
     ) {
       router.replace(canonicalPath || resolveRoleHome(auth));
     }

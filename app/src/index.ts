@@ -13,6 +13,7 @@ import { profilerouter } from "./router/Profilerouter";
 import { Orderrouter } from "./router/Orderrouter";
 import { RestaurantRouter } from "./router/RestaurantRouter";
 import { SuperAdminRouter } from "./router/SuperAdminRouter";
+import { ReportRouter } from "./router/ReportRouter";
 import { ensureSalesSchema } from "./lib/connect";
 
 const port = Number(Bun.env.PORT || 4000);
@@ -36,7 +37,7 @@ app
     cors({
       origin: ({ headers }) => isAllowedOrigin(headers.get("origin")),
       credentials: true,
-      methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+      methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization", "X-XSRF-TOKEN"],
     }),
   )
@@ -109,6 +110,7 @@ app
   .use(Auths)
   .use(RestaurantRouter)
   .use(SuperAdminRouter)
+  .use(ReportRouter)
   .use(menurouter)
   .use(Orderrouter)
   .use(web)

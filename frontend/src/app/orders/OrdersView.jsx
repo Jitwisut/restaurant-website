@@ -36,6 +36,7 @@ const orderStatusOptions = [
   "accepted",
   "preparing",
   "ready",
+  "served",
   "completed",
   "cancelled",
   "rejected",
@@ -84,6 +85,12 @@ function statusMeta(status) {
         label: "Ready",
         badge: "bg-indigo-500/10 text-indigo-700 ring-1 ring-indigo-500/20",
         dot: "bg-indigo-500",
+      };
+    case "served":
+      return {
+        label: "Served",
+        badge: "bg-emerald-500/10 text-emerald-700 ring-1 ring-emerald-500/20",
+        dot: "bg-emerald-500",
       };
     case "rejected":
       return {

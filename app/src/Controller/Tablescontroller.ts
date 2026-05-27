@@ -6,6 +6,10 @@ import { requireRole } from "../middleware/restaurantScope";
 import { notifyTableClosed } from "../router/websocket";
 import { buildBillPaymentQr } from "../lib/paymentQr";
 import {
+  listSessionTimeline,
+  writeOrderEvent,
+} from "../lib/orderEvents";
+import {
   buildGuestSessionUsername,
   findActiveSessionByHash,
   GUEST_SESSION_TTL_SECONDS,
@@ -85,6 +89,56 @@ async function markSessionOrdersPaid(
             payment_status = 'paid',
             paid_at = COALESCE(o.paid_at, NOW()),
             completed_at = COALESCE(o.completed_at, NOW())
+       FROM order_totals
+      WHERE o.id = order_totals.id
+        AND o.restaurant_id = $1`,
+    [restaurantId, sessionId, serviceChargeRate, taxRate],
+  );
+}
+
+async function recalculateSessionOrderTotals(
+  restaurantId: string | number,
+  sessionId: string,
+) {
+  const settingsPayload = await getRestaurantSettings(Number(restaurantId));
+  const orderSettings = settingsPayload?.settings?.order_settings || {};
+  const serviceChargeRate =
+    Number(orderSettings.serviceChargePercent || 0) / 100;
+  const taxRate = Number(orderSettings.taxPercent || 0) / 100;
+
+  return db.query(
+    `WITH order_totals AS (
+       SELECT
+         o.id,
+         COALESCE(SUM(oi.quantity * oi.price::numeric), 0) AS subtotal
+       FROM orders o
+       LEFT JOIN order_items oi
+         ON oi.order_id = o.id
+        AND oi.restaurant_id = o.restaurant_id
+       WHERE o.restaurant_id = $1
+         AND o.customer_session = $2
+         AND o.status <> 'cancelled'
+       GROUP BY o.id
+     )
+     UPDATE orders o
+        SET subtotal = order_totals.subtotal,
+            service_charge_amount = ROUND(order_totals.subtotal * $3::numeric, 2),
+            tax_amount = ROUND(
+              (order_totals.subtotal + ROUND(order_totals.subtotal * $3::numeric, 2) - o.discount_amount)
+                * $4::numeric,
+              2
+            ),
+            grand_total = GREATEST(
+              order_totals.subtotal
+                - o.discount_amount
+                + ROUND(order_totals.subtotal * $3::numeric, 2)
+                + ROUND(
+                  (order_totals.subtotal + ROUND(order_totals.subtotal * $3::numeric, 2) - o.discount_amount)
+                    * $4::numeric,
+                  2
+                ),
+              0
+            )
        FROM order_totals
       WHERE o.id = order_totals.id
         AND o.restaurant_id = $1`,
@@ -355,6 +409,14 @@ export const Tablecontroller = {
         );
 
         await db.query("COMMIT");
+        await writeOrderEvent({
+          restaurantId: scope.restaurantId,
+          sessionId: hash,
+          actorRole: scope.payload?.role || null,
+          actorEmail: scope.payload?.email || null,
+          eventType: "table_opened",
+          metadata: { table_number: tableNumber, rotated_from: oldSessionId || null },
+        });
         return {
           message: "Open table success",
           table_number: tableNumber,
@@ -365,6 +427,14 @@ export const Tablecontroller = {
       }
 
       await db.query("COMMIT");
+      await writeOrderEvent({
+        restaurantId: scope.restaurantId,
+        sessionId: hash,
+        actorRole: scope.payload?.role || null,
+        actorEmail: scope.payload?.email || null,
+        eventType: "table_opened",
+        metadata: { table_number: tableNumber },
+      });
       return {
         message: "Open table success",
         table_number: tableNumber,
@@ -454,7 +524,15 @@ export const Tablecontroller = {
 
       let bill = null;
       if (closedSessionId) {
-        await markSessionOrdersPaid(scope.restaurantId, String(closedSessionId));
+        await recalculateSessionOrderTotals(scope.restaurantId, String(closedSessionId));
+        await writeOrderEvent({
+          restaurantId: scope.restaurantId,
+          sessionId: String(closedSessionId),
+          actorRole: scope.payload?.role || null,
+          actorEmail: scope.payload?.email || null,
+          eventType: "table_closed",
+          metadata: { table_number: tableNumber },
+        });
         bill = await buildSessionBill(scope.restaurantId, String(closedSessionId));
       }
 
@@ -605,6 +683,14 @@ export const Tablecontroller = {
     }
 
     await markSessionOrdersPaid(scope.restaurantId, String(sessionId));
+    await writeOrderEvent({
+      restaurantId: scope.restaurantId,
+      sessionId: String(sessionId),
+      actorRole: scope.payload?.role || null,
+      actorEmail: scope.payload?.email || null,
+      eventType: "payment_approved",
+      metadata: { table_number: tablenumber, source: "ordersuccess" },
+    });
     return { message: "success" };
   },
 
@@ -697,6 +783,207 @@ export const Tablecontroller = {
     }
 
     return { bill };
+  },
+
+  sessionTimeline: async (
+    context: Context & {
+      params: { session: string };
+      jwt?: any;
+    },
+  ) => {
+    const { set, params } = context;
+    const scope = await requireRole(context, [
+      "admin",
+      "owner",
+      "staff",
+      "kitchen",
+      "superadmin",
+    ]);
+    if (!scope.ok) return scope.response;
+
+    const sessionResult = await db.query(
+      `SELECT 1
+         FROM sessions
+        WHERE restaurant_id = $1
+          AND session_id::text = $2
+        LIMIT 1`,
+      [scope.restaurantId, params.session],
+    );
+    if (sessionResult.rowCount === 0) {
+      set.status = 404;
+      return { message: "Session not found" };
+    }
+
+    const timeline = await listSessionTimeline(
+      scope.restaurantId,
+      params.session,
+      scope.payload?.role || null,
+    );
+    return { timeline };
+  },
+
+  submitSessionPaymentProof: async (
+    context: Context & {
+      params: { session: string };
+      body: { reference?: string; note?: string };
+      jwt?: any;
+    },
+  ) => {
+    const { set, params, body } = context;
+    const scope = await requireRole(context, [
+      "user",
+      "admin",
+      "owner",
+      "staff",
+      "superadmin",
+    ]);
+    if (!scope.ok) return scope.response;
+
+    const tokenSessionId = (scope.payload as any)?.session_id;
+    if (scope.payload?.role === "user" && tokenSessionId !== params.session) {
+      set.status = 403;
+      return { message: "Forbidden: Invalid table session" };
+    }
+
+    const result = await db.query(
+      `UPDATE orders
+          SET payment_status = 'pending_review',
+              payment_reference = COALESCE($3::text, payment_reference),
+              payment_review_note = $4::text,
+              payment_submitted_at = NOW(),
+              payment_reviewed_at = NULL,
+              payment_reviewed_by = NULL
+        WHERE restaurant_id = $1
+          AND customer_session::text = $2
+          AND status NOT IN ('cancelled', 'rejected')
+        RETURNING id`,
+      [scope.restaurantId, params.session, body.reference || null, body.note || null],
+    );
+    if (result.rowCount === 0) {
+      set.status = 404;
+      return { message: "No payable orders found for this session" };
+    }
+
+    await writeOrderEvent({
+      restaurantId: scope.restaurantId,
+      sessionId: params.session,
+      actorRole: scope.payload?.role || null,
+      actorEmail: scope.payload?.email || null,
+      eventType: "payment_submitted",
+      metadata: { reference: body.reference || null, note: body.note || null },
+    });
+    const bill = await buildSessionBill(scope.restaurantId, params.session);
+    return { bill, updated_orders: result.rowCount };
+  },
+
+  approveSessionPayment: async (
+    context: Context & {
+      params: { session: string };
+      body: { note?: string };
+      jwt?: any;
+    },
+  ) => {
+    const { set, params, body } = context;
+    const scope = await requireRole(context, ["admin", "owner", "superadmin"]);
+    if (!scope.ok) return scope.response;
+
+    await recalculateSessionOrderTotals(scope.restaurantId, params.session);
+    const reviewerIdResult = scope.payload?.email
+      ? await db.query("SELECT id FROM users WHERE LOWER(email)=LOWER($1)", [
+          scope.payload.email,
+        ])
+      : { rows: [] };
+    const result = await db.query(
+      `UPDATE orders
+          SET status = 'completed',
+              payment_status = 'paid',
+              payment_review_note = $3::text,
+              payment_reviewed_at = NOW(),
+              payment_reviewed_by = $4::integer,
+              paid_at = COALESCE(paid_at, NOW()),
+              completed_at = COALESCE(completed_at, NOW()),
+              updated_at = NOW()
+        WHERE restaurant_id = $1
+          AND customer_session::text = $2
+          AND status NOT IN ('cancelled', 'rejected')
+        RETURNING id`,
+      [
+        scope.restaurantId,
+        params.session,
+        body.note || null,
+        reviewerIdResult.rows?.[0]?.id || null,
+      ],
+    );
+    if (result.rowCount === 0) {
+      set.status = 404;
+      return { message: "No payable orders found for this session" };
+    }
+
+    await writeOrderEvent({
+      restaurantId: scope.restaurantId,
+      sessionId: params.session,
+      actorRole: scope.payload?.role || null,
+      actorEmail: scope.payload?.email || null,
+      eventType: "payment_approved",
+      metadata: { note: body.note || null },
+    });
+    const bill = await buildSessionBill(scope.restaurantId, params.session);
+    return { bill, updated_orders: result.rowCount };
+  },
+
+  rejectSessionPayment: async (
+    context: Context & {
+      params: { session: string };
+      body: { reason?: string };
+      jwt?: any;
+    },
+  ) => {
+    const { set, params, body } = context;
+    const scope = await requireRole(context, ["admin", "owner", "superadmin"]);
+    if (!scope.ok) return scope.response;
+
+    if (!body.reason?.trim()) {
+      set.status = 400;
+      return { message: "Reason is required" };
+    }
+
+    const reviewerIdResult = scope.payload?.email
+      ? await db.query("SELECT id FROM users WHERE LOWER(email)=LOWER($1)", [
+          scope.payload.email,
+        ])
+      : { rows: [] };
+    const result = await db.query(
+      `UPDATE orders
+          SET payment_status = 'rejected',
+              payment_review_note = $3::text,
+              payment_reviewed_at = NOW(),
+              payment_reviewed_by = $4::integer
+        WHERE restaurant_id = $1
+          AND customer_session::text = $2
+          AND status NOT IN ('cancelled', 'rejected')
+        RETURNING id`,
+      [
+        scope.restaurantId,
+        params.session,
+        body.reason,
+        reviewerIdResult.rows?.[0]?.id || null,
+      ],
+    );
+    if (result.rowCount === 0) {
+      set.status = 404;
+      return { message: "No payable orders found for this session" };
+    }
+
+    await writeOrderEvent({
+      restaurantId: scope.restaurantId,
+      sessionId: params.session,
+      actorRole: scope.payload?.role || null,
+      actorEmail: scope.payload?.email || null,
+      eventType: "payment_rejected",
+      metadata: { reason: body.reason },
+    });
+    const bill = await buildSessionBill(scope.restaurantId, params.session);
+    return { bill, updated_orders: result.rowCount };
   },
 
   addtable: async (context: Context & { jwt?: any }) => {

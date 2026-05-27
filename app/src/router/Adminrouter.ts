@@ -12,6 +12,7 @@ export const Adminrouter = (app: Elysia) => {
       .post("/updateuser", Admincontroller.updateuser)
       .post("/createuser", Admincontroller.createuser)
       .post("/upload-menu", Admincontroller.uploaddata)
+      .patch("/menu/:id/availability", Admincontroller.updateMenuAvailability)
       .patch("/menu/:id", Admincontroller.updateMenu)
       .delete("/menu/:id", Admincontroller.deleteMenu)
       .post("/deleteuser", Admincontroller.deletedata);

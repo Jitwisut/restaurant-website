@@ -40,6 +40,7 @@ export const Tablerouter = (app: Elysia) => {
       .get("/session/:session/menu", menucontroller.getSessionMenu)
       .get("/session/:session/bill", Tablecontroller.sessionBill)
       .get("/session/:session/orders", Tablecontroller.sessionOrders)
+      .get("/session/:session/timeline", Tablecontroller.sessionTimeline)
       .post("/session/:session/guest-token", Tablecontroller.createGuestToken)
 
       .post("/ordersuccess", Tablecontroller.ordersuccess, {
@@ -58,6 +59,10 @@ export const Tablerouter = (app: Elysia) => {
   });
   app.group("/sessions", (app) => {
     app.get("/:session/bill", Tablecontroller.publicSessionBill);
+    app.get("/:session/timeline", Tablecontroller.sessionTimeline);
+    app.post("/:session/payment-proof", Tablecontroller.submitSessionPaymentProof);
+    app.post("/:session/payment-approve", Tablecontroller.approveSessionPayment);
+    app.post("/:session/payment-reject", Tablecontroller.rejectSessionPayment);
     return app;
   });
   return app;

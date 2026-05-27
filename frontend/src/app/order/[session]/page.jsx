@@ -234,6 +234,28 @@ export default function OrderPage() {
           }
           toast(payload.status || "อัปเดตสถานะออเดอร์");
         }
+        if (payload.type === "menu_availability_updated" && payload.menu) {
+          setMenu((current) =>
+            current.map((item) =>
+              Number(item.id) === Number(payload.menu.id)
+                ? { ...item, isAvailable: payload.menu.isAvailable }
+                : item,
+            ),
+          );
+          if (payload.menu.isAvailable === false) {
+            setCart((current) => {
+              const removed = current.some(
+                (item) => Number(item.id) === Number(payload.menu.id),
+              );
+              if (removed) {
+                toast.error(`${payload.menu.name || "Menu item"} is unavailable`);
+              }
+              return current.filter(
+                (item) => Number(item.id) !== Number(payload.menu.id),
+              );
+            });
+          }
+        }
         if (payload.type === "table_closed") {
           toast.error("โต๊ะนี้ถูกปิดแล้ว");
           setTimeout(closeTableSession, 300);
@@ -312,6 +334,11 @@ export default function OrderPage() {
   const placeholderImageUrl = settings?.menu_settings?.placeholderImageUrl || "";
 
   const addToCart = (item) => {
+    if (item.isAvailable === false) {
+      toast.error(`${item.name} is unavailable`);
+      return;
+    }
+
     setCart((current) => {
       const existing = current.find((entry) => entry.id === item.id);
       if (existing) {
@@ -341,6 +368,18 @@ export default function OrderPage() {
     }
     if (!table?.table_number || cart.length === 0) {
       toast.error("กรุณาเลือกเมนูก่อน");
+      return;
+    }
+
+    const unavailableItem = cart.find((cartItem) => {
+      const menuItem = menu.find((item) => Number(item.id) === Number(cartItem.id));
+      return menuItem?.isAvailable === false;
+    });
+    if (unavailableItem) {
+      setCart((current) =>
+        current.filter((item) => Number(item.id) !== Number(unavailableItem.id)),
+      );
+      toast.error(`${unavailableItem.name} is unavailable`);
       return;
     }
 
@@ -528,10 +567,13 @@ export default function OrderPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {filteredMenu.map((item) => {
                 const cartItem = cart.find((entry) => entry.id === item.id);
+                const isUnavailable = item.isAvailable === false;
                 return (
                   <div
                     key={item.id}
-                    className="bg-surface-container-lowest border border-outline-variant rounded-lg overflow-hidden shadow-[0_4px_12px_rgba(45,62,97,0.04)] flex flex-col hover:shadow-[0_8px_20px_rgba(45,62,97,0.08)] transition-shadow duration-200"
+                    className={`bg-surface-container-lowest border border-outline-variant rounded-lg overflow-hidden shadow-[0_4px_12px_rgba(45,62,97,0.04)] flex flex-col hover:shadow-[0_8px_20px_rgba(45,62,97,0.08)] transition-shadow duration-200 ${
+                      isUnavailable ? "opacity-70" : ""
+                    }`}
                   >
                     <div className="h-48 overflow-hidden relative">
                       {item.image || placeholderImageUrl ? (
@@ -559,6 +601,13 @@ export default function OrderPage() {
                           {item.category}
                         </div>
                       )}
+                      {isUnavailable ? (
+                        <div className="absolute inset-0 flex items-center justify-center bg-white/60">
+                          <span className="rounded-full bg-slate-900 px-3 py-1 text-xs font-bold uppercase text-white">
+                            Sold out
+                          </span>
+                        </div>
+                      ) : null}
                     </div>
                     <div className="p-4 flex flex-col flex-1">
                       <div className="flex justify-between items-start mb-2">
@@ -581,7 +630,8 @@ export default function OrderPage() {
                             <span className="font-label-md text-on-surface">{cartItem.qty}</span>
                             <button
                               onClick={() => changeQty(item.id, 1)}
-                              className="w-8 h-8 rounded-md bg-primary-container text-white flex items-center justify-center hover:bg-primary shadow-sm"
+                              disabled={isUnavailable}
+                              className="w-8 h-8 rounded-md bg-primary-container text-white flex items-center justify-center hover:bg-primary shadow-sm disabled:cursor-not-allowed disabled:bg-slate-300"
                             >
                               <span className="material-symbols-outlined text-sm">add</span>
                             </button>
@@ -589,12 +639,13 @@ export default function OrderPage() {
                       ) : (
                         <button
                           onClick={() => addToCart(item)}
-                          className="w-full mt-auto bg-primary-container text-white py-2 rounded-DEFAULT font-label-md text-label-md hover:bg-primary transition-colors flex items-center justify-center gap-2"
+                          disabled={isUnavailable}
+                          className="w-full mt-auto bg-primary-container text-white py-2 rounded-DEFAULT font-label-md text-label-md hover:bg-primary transition-colors flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:bg-slate-300"
                         >
                           <span className="material-symbols-outlined text-[18px]">
                             add_circle
                           </span>
-                          Add to Order
+                          {isUnavailable ? "Sold out" : "Add to Order"}
                         </button>
                       )}
                     </div>

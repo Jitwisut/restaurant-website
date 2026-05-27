@@ -232,6 +232,11 @@ export default function TablesPage() {
   const [tableOrders, setTableOrders] = useState([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [billModal, setBillModal] = useState(null);
+  const [tableTimeline, setTableTimeline] = useState([]);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [paymentReference, setPaymentReference] = useState("");
+  const [paymentNote, setPaymentNote] = useState("");
+  const [paymentBusy, setPaymentBusy] = useState("");
 
   const loadTables = useCallback(async () => {
     if (!auth?.token) return;
@@ -334,6 +339,59 @@ export default function TablesPage() {
     popup.document.close();
     popup.focus();
     window.setTimeout(() => popup.print(), 250);
+  };
+
+  const refreshBillModal = async (sessionId) => {
+    const response = await api.get(`/tables/session/${sessionId}/bill`);
+    setBillModal(response.data.bill || null);
+    return response.data.bill || null;
+  };
+
+  const submitPaymentProof = async () => {
+    if (!billModal?.session?.session_id) return;
+    setPaymentBusy("submit");
+    try {
+      const response = await api.post(
+        `/sessions/${billModal.session.session_id}/payment-proof`,
+        {
+          reference: paymentReference,
+          note: paymentNote,
+        },
+      );
+      setBillModal(response.data.bill || billModal);
+      setPaymentReference("");
+      setPaymentNote("");
+    } catch (requestError) {
+      setError(requestError.normalizedMessage || "Unable to submit payment proof.");
+    } finally {
+      setPaymentBusy("");
+    }
+  };
+
+  const reviewPayment = async (action) => {
+    if (!billModal?.session?.session_id) return;
+    const sessionId = billModal.session.session_id;
+    setPaymentBusy(action);
+    try {
+      if (action === "approve") {
+        const response = await api.post(`/sessions/${sessionId}/payment-approve`, {
+          note: paymentNote,
+        });
+        setBillModal(response.data.bill || (await refreshBillModal(sessionId)));
+      } else {
+        const reason = paymentNote.trim() || "Payment proof rejected";
+        const response = await api.post(`/sessions/${sessionId}/payment-reject`, {
+          reason,
+        });
+        setBillModal(response.data.bill || (await refreshBillModal(sessionId)));
+      }
+      setPaymentNote("");
+      await loadTables();
+    } catch (requestError) {
+      setError(requestError.normalizedMessage || "Unable to review payment.");
+    } finally {
+      setPaymentBusy("");
+    }
   };
 
   const addTable = async () => {
@@ -452,6 +510,35 @@ export default function TablesPage() {
     };
 
     loadOrders();
+  }, [api, auth?.token, selectedTable]);
+
+  useEffect(() => {
+    const loadTimeline = async () => {
+      if (
+        !selectedTable ||
+        selectedTable.status !== "open" ||
+        !selectedTable.customer_session ||
+        !auth?.token
+      ) {
+        setTableTimeline([]);
+        setTimelineLoading(false);
+        return;
+      }
+
+      try {
+        setTimelineLoading(true);
+        const response = await api.get(
+          `/tables/session/${selectedTable.customer_session}/timeline`,
+        );
+        setTableTimeline(response.data.timeline || []);
+      } catch {
+        setTableTimeline([]);
+      } finally {
+        setTimelineLoading(false);
+      }
+    };
+
+    loadTimeline();
   }, [api, auth?.token, selectedTable]);
 
   const latestOrder = tableOrders[0] || null;
@@ -1079,6 +1166,46 @@ export default function TablesPage() {
                     )}
                   </div>
                 ) : null}
+
+                {selectedTable?.status === "open" && selectedTable.customer_session ? (
+                  <div className="rounded-xl border border-surface-variant bg-surface-container-lowest p-sm">
+                    <div className="mb-2 flex items-center justify-between">
+                      <h3 className="font-h3 text-h3 text-on-surface">
+                        Timeline
+                      </h3>
+                      <span className="text-xs text-on-surface-variant">
+                        {timelineLoading ? "Loading..." : `${tableTimeline.length} events`}
+                      </span>
+                    </div>
+                    <div className="max-h-44 space-y-2 overflow-y-auto">
+                      {tableTimeline.slice(-6).map((event) => (
+                        <div
+                          key={event.id}
+                          className="rounded-lg bg-surface-container-low px-3 py-2 text-sm"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="font-semibold text-on-surface">
+                              {String(event.event_type || "").replace(/_/g, " ")}
+                            </span>
+                            <span className="shrink-0 text-xs text-on-surface-variant">
+                              {formatBillDate(event.created_at)}
+                            </span>
+                          </div>
+                          {event.order_id ? (
+                            <p className="mt-1 truncate text-xs text-on-surface-variant">
+                              Order {event.order_id}
+                            </p>
+                          ) : null}
+                        </div>
+                      ))}
+                      {!timelineLoading && tableTimeline.length === 0 ? (
+                        <p className="rounded-lg bg-surface-container-low px-3 py-3 text-sm text-on-surface-variant">
+                          No timeline events yet.
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
               </>
             ) : (
               <div className="rounded-xl bg-surface-container-low px-4 py-4 text-sm text-on-surface-variant">
@@ -1293,6 +1420,59 @@ export default function TablesPage() {
                         ) : null}
                       </div>
                     )}
+                  </div>
+                </div>
+
+                <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                    <div className="flex-1">
+                      <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                        Payment reference
+                      </label>
+                      <input
+                        value={paymentReference}
+                        onChange={(event) => setPaymentReference(event.target.value)}
+                        placeholder="Slip/reference"
+                        className="mt-1 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none focus:border-primary"
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                        Note
+                      </label>
+                      <input
+                        value={paymentNote}
+                        onChange={(event) => setPaymentNote(event.target.value)}
+                        placeholder="Review note"
+                        className="mt-1 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none focus:border-primary"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={submitPaymentProof}
+                      disabled={paymentBusy === "submit"}
+                      className="h-10 rounded-lg bg-primary px-4 text-sm font-semibold text-on-primary transition hover:bg-primary-container disabled:opacity-60"
+                    >
+                      {paymentBusy === "submit" ? "Submitting..." : "Submit proof"}
+                    </button>
+                  </div>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={() => reviewPayment("approve")}
+                      disabled={paymentBusy === "approve"}
+                      className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-60"
+                    >
+                      {paymentBusy === "approve" ? "Approving..." : "Approve payment"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => reviewPayment("reject")}
+                      disabled={paymentBusy === "reject"}
+                      className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-700 disabled:opacity-60"
+                    >
+                      {paymentBusy === "reject" ? "Rejecting..." : "Reject payment"}
+                    </button>
                   </div>
                 </div>
 

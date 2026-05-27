@@ -5,6 +5,7 @@ import Swal from "sweetalert2";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import MenuUpload from "../components/menupload";
+import AdminAiAssistant from "./AdminAiAssistant";
 import { buildRestaurantPath } from "@/lib/auth";
 import { buildWsUrl, createApiClient } from "@/lib/api";
 import { useAuth } from "../components/AuthProvider";
@@ -237,6 +238,16 @@ export default function RestaurantDashboard() {
   const [analyticsError, setAnalyticsError] = useState(null);
   const [analyticsDays, setAnalyticsDays] = useState(7);
   const [analyticsUpdatedAt, setAnalyticsUpdatedAt] = useState(null);
+  const [dailyClosing, setDailyClosing] = useState(null);
+  const [dailyClosingDate, setDailyClosingDate] = useState(() =>
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Bangkok",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date()),
+  );
+  const [dailyClosingLoading, setDailyClosingLoading] = useState(false);
 
   const reservedTables =
     analytics.summary.openTables ||
@@ -304,9 +315,46 @@ export default function RestaurantDashboard() {
     }
   }, [analyticsDays, api]);
 
+  const loadDailyClosing = useCallback(async () => {
+    setDailyClosingLoading(true);
+    try {
+      const response = await api.get("/reports/daily-closing", {
+        params: { date: dailyClosingDate },
+      });
+      setDailyClosing(response.data.report || null);
+    } catch {
+      setDailyClosing(null);
+    } finally {
+      setDailyClosingLoading(false);
+    }
+  }, [api, dailyClosingDate]);
+
+  const exportDailyClosingCsv = async () => {
+    try {
+      const response = await api.get("/reports/daily-closing.csv", {
+        params: { date: dailyClosingDate },
+        responseType: "blob",
+      });
+      const blobUrl = URL.createObjectURL(response.data);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = `daily-closing-${dailyClosingDate}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(blobUrl);
+    } catch (error) {
+      Swal.fire({
+        icon: "error",
+        title: "Export failed",
+        text: error.normalizedMessage || "Unable to export daily closing CSV",
+      });
+    }
+  };
+
   useEffect(() => {
     if (!ready || !allowed || !auth?.token) return;
-    if (activeTab === "menu") {
+    if (activeTab === "menu" || activeTab === "ai") {
       loadMenus();
     }
   }, [activeTab, allowed, auth?.token, loadMenus, ready]);
@@ -458,10 +506,15 @@ export default function RestaurantDashboard() {
 
   useEffect(() => {
     if (!ready || !allowed || !auth?.token) return;
-    if (activeTab === "staff") {
+    if (activeTab === "staff" || activeTab === "ai") {
       loadAnalytics();
+      loadDailyClosing();
     }
-  }, [activeTab, allowed, auth?.token, loadAnalytics, ready]);
+  }, [activeTab, allowed, auth?.token, loadAnalytics, loadDailyClosing, ready]);
+
+  const refreshAiContext = useCallback(async () => {
+    await Promise.all([loadAnalytics(), loadDailyClosing(), loadMenus()]);
+  }, [loadAnalytics, loadDailyClosing, loadMenus]);
 
   useEffect(() => {
     if (!ready || !allowed || auth?.role !== "superadmin" || !auth?.token) {
@@ -573,21 +626,18 @@ export default function RestaurantDashboard() {
 
   const toggleMenuAvailability = async (item) => {
     const nextAvailable = item.isAvailable === false;
-    const formData = new FormData();
-    formData.append("name", item.name || "");
-    formData.append("price", item.price || "");
-    formData.append("category", item.category || "");
-    formData.append("description", item.description || "");
-    formData.append("ingredients", item.ingredients || "");
-    formData.append("isAvailable", String(nextAvailable));
 
     try {
-      await api.patch(`/admin/menu/${item.id}`, formData, {
-        headers: { "Content-Type": "multipart/form-data" },
+      const response = await api.patch(`/admin/menu/${item.id}/availability`, {
+        isAvailable: nextAvailable,
       });
+      const updatedMenu = response.data.menu || {
+        ...item,
+        isAvailable: nextAvailable,
+      };
       setMenus((current) =>
         current.map((menu) =>
-          menu.id === item.id ? { ...menu, isAvailable: nextAvailable } : menu,
+          menu.id === item.id ? { ...menu, ...updatedMenu } : menu,
         ),
       );
     } catch (error) {
@@ -832,6 +882,18 @@ export default function RestaurantDashboard() {
           >
             <span className="material-symbols-outlined" style={{ fontVariationSettings: "'FILL' 1" }}>restaurant_menu</span>
             <span className="font-sans text-sm">Menu Management</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab("ai")}
+            className={`flex items-center w-full gap-3 px-3 py-2.5 rounded-lg font-semibold transition-all ${
+              activeTab === "ai"
+                ? "bg-slate-100 dark:bg-indigo-900/20 text-indigo-900 dark:text-indigo-300 border-r-4 border-indigo-900 dark:border-indigo-400"
+                : "text-slate-600 dark:text-slate-400 hover:text-indigo-800 dark:hover:text-indigo-200 hover:bg-slate-50 dark:hover:bg-slate-900"
+            }`}
+          >
+            <span className="material-symbols-outlined">auto_awesome</span>
+            <span className="font-sans text-sm">AI Assistant</span>
           </button>
           
           <Link
@@ -1197,6 +1259,116 @@ export default function RestaurantDashboard() {
           </div>
         ) : null}
 
+        <div className="mb-lg rounded-xl border border-slate-100 bg-white p-md shadow-sm">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="text-label-md font-bold uppercase tracking-wider text-slate-500">
+                Daily Closing
+              </p>
+              <h3 className="mt-1 font-h3 text-h3 text-primary">
+                Close of day snapshot
+              </h3>
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <input
+                type="date"
+                value={dailyClosingDate}
+                onChange={(event) => setDailyClosingDate(event.target.value)}
+                className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none focus:border-primary"
+              />
+              <button
+                type="button"
+                onClick={loadDailyClosing}
+                disabled={dailyClosingLoading}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+              >
+                <span
+                  className={`material-symbols-outlined text-[18px] ${
+                    dailyClosingLoading ? "animate-spin" : ""
+                  }`}
+                >
+                  refresh
+                </span>
+                Load
+              </button>
+              <button
+                type="button"
+                onClick={exportDailyClosingCsv}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-slate-900 px-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+              >
+                <span className="material-symbols-outlined text-[18px]">
+                  download
+                </span>
+                CSV
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {[
+              ["Paid sales", dailyClosing?.summary?.paidSales],
+              ["Gross sales", dailyClosing?.summary?.grossSales],
+              ["Unpaid/pending", dailyClosing?.summary?.unpaidPending],
+              ["Average bill", dailyClosing?.summary?.averageBill],
+            ].map(([label, value]) => (
+              <div
+                key={label}
+                className="rounded-lg bg-slate-50 px-4 py-3 ring-1 ring-slate-100"
+              >
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  {label}
+                </p>
+                <p className="mt-1 text-lg font-bold text-slate-950">
+                  {dailyClosingLoading ? "Loading..." : formatTHB(value)}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <div className="rounded-lg border border-slate-100 p-4">
+              <p className="text-sm font-bold text-slate-900">Top menu items</p>
+              <div className="mt-3 space-y-2">
+                {(dailyClosing?.topMenuItems || []).slice(0, 5).map((item) => (
+                  <div
+                    key={item.name}
+                    className="flex items-center justify-between gap-3 text-sm"
+                  >
+                    <span className="truncate text-slate-700">{item.name}</span>
+                    <span className="font-semibold text-slate-950">
+                      {item.quantity} · {formatTHB(item.revenue)}
+                    </span>
+                  </div>
+                ))}
+                {(dailyClosing?.topMenuItems || []).length === 0 ? (
+                  <p className="text-sm text-slate-500">No paid sales yet.</p>
+                ) : null}
+              </div>
+            </div>
+            <div className="rounded-lg border border-slate-100 p-4">
+              <p className="text-sm font-bold text-slate-900">Open tables</p>
+              <div className="mt-3 space-y-2">
+                {(dailyClosing?.openTables || []).slice(0, 5).map((table) => (
+                  <div
+                    key={`${table.table_number}-${table.customer_session}`}
+                    className="flex items-center justify-between gap-3 text-sm"
+                  >
+                    <span className="text-slate-700">
+                      Table {table.table_number}
+                    </span>
+                    <span className="max-w-[180px] truncate font-mono text-xs text-slate-500">
+                      {table.customer_session}
+                    </span>
+                  </div>
+                ))}
+                {(dailyClosing?.openTables || []).length === 0 ? (
+                  <p className="text-sm text-slate-500">No open tables.</p>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </div>
+
         {/* User Management Table */}
         <div className="bg-surface-container-lowest border border-slate-100 rounded-xl shadow-sm overflow-hidden">
           <div className="px-md py-base border-b border-slate-100 flex items-center justify-between bg-surface-container-low/30">
@@ -1408,6 +1580,19 @@ export default function RestaurantDashboard() {
           </div>
         </div>
           </>
+        )}
+
+        {activeTab === "ai" && (
+          <AdminAiAssistant
+            analytics={analytics}
+            auth={auth}
+            dailyClosing={dailyClosing}
+            loadMenus={loadMenus}
+            menus={menus}
+            menusLoading={menusLoading || analyticsLoading || dailyClosingLoading}
+            onRefreshContext={refreshAiContext}
+            tables={tables}
+          />
         )}
 
         {activeTab === "menu" && (

@@ -548,4 +548,81 @@ describe("Table Controller - Session and add table", () => {
     expect(otherOrder.rows[0].status).toBe("pending");
     expect(otherOrder.rows[0].payment_status).toBe("unpaid");
   });
+
+  test("records and returns the session timeline for a table session", async () => {
+    const app = createTestApp();
+    const tableNumber = 42;
+    await createAvailableTable(tableNumber);
+
+    const openResponse = await app.handle(
+      new Request("http://localhost/tables/opentable", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ number: tableNumber }),
+      }),
+    );
+    const opened = await openResponse.json();
+
+    const response = await app.handle(
+      new Request(`http://localhost/tables/session/${opened.session_hash}/timeline`, {
+        method: "GET",
+        headers: authHeaders(),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.timeline.some((event: any) => event.event_type === "table_opened")).toBe(true);
+  });
+
+  test("session payment proof can be submitted, approved, and counted as paid", async () => {
+    const app = createTestApp();
+    const tableNumber = 43;
+    const sessionId = await createOpenTable(tableNumber, TEST_RESTAURANT_ID);
+    const orderId = `session-payment-${Date.now()}`;
+
+    await db.query(
+      `INSERT INTO orders (id, table_number, customer_session, status, restaurant_id, subtotal, grand_total)
+       VALUES ($1, $2, $3, 'served', $4, 120, 120)`,
+      [orderId, tableNumber, sessionId, TEST_RESTAURANT_ID],
+    );
+    await db.query(
+      `INSERT INTO order_items (order_id, menu_item_name, quantity, price, restaurant_id)
+       VALUES ($1, 'Paid Dish', 1, 120, $2)`,
+      [orderId, TEST_RESTAURANT_ID],
+    );
+
+    const proofResponse = await app.handle(
+      new Request(`http://localhost/sessions/${sessionId}/payment-proof`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders({ role: "staff" }) },
+        body: JSON.stringify({ reference: "SLIP-001", note: "uploaded" }),
+      }),
+    );
+
+    expect(proofResponse.status).toBe(200);
+    let order = await db.query(
+      "SELECT payment_status, payment_reference FROM orders WHERE id=$1",
+      [orderId],
+    );
+    expect(order.rows[0].payment_status).toBe("pending_review");
+    expect(order.rows[0].payment_reference).toBe("SLIP-001");
+
+    const approveResponse = await app.handle(
+      new Request(`http://localhost/sessions/${sessionId}/payment-approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders({ role: "admin" }) },
+        body: JSON.stringify({ note: "ok" }),
+      }),
+    );
+
+    expect(approveResponse.status).toBe(200);
+    order = await db.query(
+      "SELECT status, payment_status, paid_at FROM orders WHERE id=$1",
+      [orderId],
+    );
+    expect(order.rows[0].status).toBe("completed");
+    expect(order.rows[0].payment_status).toBe("paid");
+    expect(order.rows[0].paid_at).toBeTruthy();
+  });
 });
